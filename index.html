@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aerospace Engineering First</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #2f2f2f;
+      --muted: #6f6d66;
+      --line: #d7d3c9;
+      --panel: #f6f4ee;
+      --accent: #d85a30;
+      --green: #1d9e75;
+    }
+
+    body {
+      margin: 0;
+      font-family: Inter, "Noto Sans KR", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: #fbfaf7;
+      line-height: 1.5;
+    }
+
+    main {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 40px 20px 56px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 5vw, 44px);
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 14px;
+      margin-top: 28px;
+    }
+
+    a.card {
+      display: block;
+      min-height: 120px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      color: inherit;
+      text-decoration: none;
+      box-shadow: 0 8px 24px rgba(47, 47, 47, 0.06);
+    }
+
+    .card strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 17px;
+    }
+
+    .card span {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .tag {
+      display: inline-block;
+      margin-top: 16px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .tag.exam {
+      background: #faece7;
+      color: #712b13;
+    }
+
+    .tag.interactive {
+      background: #e1f5ee;
+      color: #085041;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>항공우주공학개론 HTML 자료</h1>
+    <p>Notion embed용 정적 HTML 페이지 모음입니다.</p>
+
+    <section class="grid" aria-label="HTML 자료 목록">
+      <a class="card" href="./aerospace_intro_midterm_review_dashboard.html">
+        <strong>중간정리 대시보드</strong>
+        <span>Chapter 1-7 핵심 개념, 공식, 시험 포인트</span>
+        <span class="tag exam">review</span>
+      </a>
+
+      <a class="card" href="./mach_speed_regime_characteristics.html">
+        <strong>Mach 수 영역별 비행 특성</strong>
+        <span>항력계수와 양항비의 Mach 의존성 차트</span>
+        <span class="tag interactive">chart</span>
+      </a>
+
+      <a class="card" href="./adverse_yaw_vs_dutch_roll_comparison.html">
+        <strong>Adverse Yaw vs Dutch Roll</strong>
+        <span>조종 입력 문제와 동안정성 진동 비교</span>
+        <span class="tag interactive">simulation</span>
+      </a>
+
+      <a class="card" href="./static_margin_cg_np_interactive.html">
+        <strong>Static Margin CG NP</strong>
+        <span>CG와 NP의 상대 위치로 보는 세로 안정성</span>
+        <span class="tag interactive">interactive</span>
+      </a>
+    </section>
+  </main>
+</body>
+</html>

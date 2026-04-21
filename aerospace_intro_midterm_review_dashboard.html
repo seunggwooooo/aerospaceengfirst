@@ -1,0 +1,183 @@
+<div style="padding: 1rem 0;">
+<h2 class="sr-only">항공우주공학개론 중간고사 대비 총정리 대시보드 — 7개 챕터의 핵심 개념과 공식을 인터랙티브로 탐색</h2>
+
+<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 12px;">
+  <div>
+    <div style="font-size: 22px; font-weight: 500; color: var(--color-text-primary);">항공우주공학개론 중간정리</div>
+    <div style="font-size: 13px; color: var(--color-text-secondary); margin-top: 2px;">Chapter 1 – 7 핵심 개념 · 공식 · 시험 포인트</div>
+  </div>
+  <div style="display: flex; gap: 8px; font-size: 12px; color: var(--color-text-secondary);">
+    <span style="display: inline-flex; align-items: center; gap: 4px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #D85A30;"></span>시험 필수</span>
+    <span style="display: inline-flex; align-items: center; gap: 4px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #1D9E75;"></span>개념 이해</span>
+    <span style="display: inline-flex; align-items: center; gap: 4px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #888780;"></span>참고</span>
+  </div>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-bottom: 1.5rem;">
+  <button class="tab-btn active" data-ch="all" style="padding: 8px 12px; font-size: 13px; border: 0.5px solid var(--color-border-secondary); background: var(--color-background-secondary); border-radius: var(--border-radius-md); cursor: pointer;">전체</button>
+  <button class="tab-btn" data-ch="1" style="padding: 8px 12px; font-size: 13px; border: 0.5px solid var(--color-border-tertiary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">1. 개요</button>
+  <button class="tab-btn" data-ch="2" style="padding: 8px 12px; font-size: 13px; border: 0.5px solid var(--color-border-tertiary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">2. 대기권</button>
+  <button class="tab-btn" data-ch="3" style="padding: 8px 12px; font-size: 13px; border: 0.5px solid var(--color-border-tertiary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">3. 공력</button>
+  <button class="tab-btn" data-ch="4" style="padding: 8px 12px; font-size: 13px; border: 0.5px solid var(--color-border-tertiary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">4. 구조</button>
+  <button class="tab-btn" data-ch="5" style="padding: 8px 12px; font-size: 13px; border: 0.5px solid var(--color-border-tertiary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">5. 추진</button>
+  <button class="tab-btn" data-ch="6" style="padding: 8px 12px; font-size: 13px; border: 0.5px solid var(--color-border-tertiary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">6. 성능</button>
+  <button class="tab-btn" data-ch="7" style="padding: 8px 12px; font-size: 13px; border: 0.5px solid var(--color-border-tertiary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">7. 안정성</button>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 1.5rem;">
+  <div style="background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 12px;">
+    <div style="font-size: 12px; color: var(--color-text-secondary);">챕터</div>
+    <div style="font-size: 22px; font-weight: 500; margin-top: 2px;">7</div>
+  </div>
+  <div style="background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 12px;">
+    <div style="font-size: 12px; color: var(--color-text-secondary);">핵심 공식</div>
+    <div style="font-size: 22px; font-weight: 500; margin-top: 2px;">12</div>
+  </div>
+  <div style="background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 12px;">
+    <div style="font-size: 12px; color: var(--color-text-secondary);">주요 개념</div>
+    <div style="font-size: 22px; font-weight: 500; margin-top: 2px;">40+</div>
+  </div>
+  <div style="background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 12px;">
+    <div style="font-size: 12px; color: var(--color-text-secondary);">시험 문제</div>
+    <div style="font-size: 22px; font-weight: 500; margin-top: 2px;">14</div>
+  </div>
+</div>
+
+<div id="content-area"></div>
+
+<div style="margin-top: 2rem; padding: 1rem; background: var(--color-background-secondary); border-radius: var(--border-radius-lg);">
+  <div style="font-size: 14px; font-weight: 500; margin-bottom: 10px;">교수님 강조 포인트</div>
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; font-size: 13px; color: var(--color-text-secondary);">
+    <div style="padding: 8px 10px; background: var(--color-background-primary); border-radius: var(--border-radius-md); border-left: 3px solid #D85A30;">공식 암기가 아니라 물리적 의미 이해가 핵심</div>
+    <div style="padding: 8px 10px; background: var(--color-background-primary); border-radius: var(--border-radius-md); border-left: 3px solid #D85A30;">양력은 "들어 올리는 힘"이 아니라 상대풍에 수직인 힘</div>
+    <div style="padding: 8px 10px; background: var(--color-background-primary); border-radius: var(--border-radius-md); border-left: 3px solid #D85A30;">CL은 절대 1을 넘을 수 없다</div>
+    <div style="padding: 8px 10px; background: var(--color-background-primary); border-radius: var(--border-radius-md); border-left: 3px solid #D85A30;">기준점은 CP가 아니라 AC를 사용</div>
+  </div>
+</div>
+
+<div style="margin-top: 1rem; display: flex; gap: 8px; flex-wrap: wrap;">
+  <button onclick="sendPrompt('천음속에서 여객기가 순항하는 이유를 양항비 관점에서 자세히 설명해줘')" style="padding: 8px 14px; font-size: 13px; border: 0.5px solid var(--color-border-secondary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">천음속 순항 이유 ↗</button>
+  <button onclick="sendPrompt('Static Margin과 Neutral Point의 관계를 여객기 vs 전투기 설계 관점에서 설명해줘')" style="padding: 8px 14px; font-size: 13px; border: 0.5px solid var(--color-border-secondary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">SM vs 전투기 설계 ↗</button>
+  <button onclick="sendPrompt('Adverse yaw와 Dutch roll의 차이를 설명해줘')" style="padding: 8px 14px; font-size: 13px; border: 0.5px solid var(--color-border-secondary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">Adverse yaw vs Dutch roll ↗</button>
+</div>
+
+<style>
+.tab-btn.active { background: var(--color-background-secondary) !important; border-color: var(--color-border-secondary) !important; font-weight: 500; }
+.concept-card { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 14px 16px; margin-bottom: 10px; }
+.concept-title { font-size: 15px; font-weight: 500; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+.concept-body { font-size: 13px; color: var(--color-text-secondary); line-height: 1.6; }
+.ch-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--color-background-secondary); color: var(--color-text-secondary); }
+.formula { font-family: var(--font-mono); font-size: 13px; background: var(--color-background-secondary); padding: 6px 10px; border-radius: var(--border-radius-md); display: inline-block; margin-top: 6px; }
+.tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-right: 4px; margin-top: 6px; }
+.tag-exam { background: #FAECE7; color: #712B13; }
+.tag-concept { background: #E1F5EE; color: #085041; }
+.tag-ref { background: #F1EFE8; color: #444441; }
+</style>
+
+<script>
+const data = [
+  { ch: 1, title: '항공우주학의 4대 분야', body: 'Aerodynamics · Structural mechanics · Propulsion/Thermodynamics · Control/Dynamics. System Integration이 핵심 특징 — B-777은 300만 개 부품.', tag: 'concept' },
+  { ch: 1, title: '우리나라 주요 기체', body: 'KT-1 (훈련기), T-50/FA-50 (최초 초음속 Mach 1.4, GE F404 엔진), KF-21 (최근 출고). 한국 항공 역사는 시험 범위 아님.', tag: 'ref' },
+  { ch: 2, title: '대기권 5층 구조', body: 'Troposphere → Stratosphere → Mesosphere → Thermosphere → Exosphere. 화성도 유사 구조 — 2021년 Ingenuity 드론 비행.', tag: 'exam' },
+  { ch: 2, title: '기온 감률 (Lapse rate)', body: '대류권에서 고도 1 km당 약 −6.5 °C. 상식적으로 숙지할 것.', formula: 'dT/dh ≈ -6.5 °C/km', tag: 'exam' },
+  { ch: 2, title: '속도 4종 표기', body: 'IAS (Indicated), CAS (Calibrated), EAS (Equivalent), TAS (True). 동압 측정으로 속도 추정 — 의미만 이해.', tag: 'concept' },
+  { ch: 2, title: 'SI 단위', body: '힘 = N (Newton), 속도 = m/s, 압력 = N/m² (Pa 대신 선호 표기). 시험도 이 표기로 출제.', tag: 'exam' },
+  { ch: 3, title: 'Bernoulli 방정식', body: '비점성·비압축·정상유동·유선 따라 성립. 공기에서는 ρgh 항 무시. 반드시 암기 + 물리적 의미 이해.', formula: 'P + ½ρV² = const', tag: 'exam' },
+  { ch: 3, title: '압력계수 Cp', body: 'Cp < 0: 부압·고속 / Cp > 0: 정압·저속 / Cp = 0: 자유류와 동일 / Cp = 1: Stagnation point.', formula: 'Cp = (P-P∞)/(½ρV∞²)', tag: 'exam' },
+  { ch: 3, title: 'CL의 한계', body: 'CL은 절대 1을 넘을 수 없다. 학부생이 가장 자주 하는 실수 — 대학원생도 실수. Cp는 ±, CL은 양의 값이며 1 이하.', tag: 'exam' },
+  { ch: 3, title: '양력 · 항력 · 모멘트 식', body: '대표면적 S = 평면 투영면적. 대표길이 C = MAC (Mean Aerodynamic Chord). 무차원 계수는 형상 특성만 추출.', formula: 'L = ½ρV²·S·CL', tag: 'exam' },
+  { ch: 3, title: 'NACA Airfoil (4자리)', body: 'NACA 2415 → 최대 캠버 2%, 캠버 위치 40%, 최대 두께 15%. NACA 0012는 대칭형 (미익용).', tag: 'exam' },
+  { ch: 3, title: 'CP vs AC', body: 'CP는 받음각 변화에 위치 이동 → 기준점 부적합. AC는 받음각 변해도 모멘트 일정 → 비행역학 기준점. 아음속에서 AC ≈ 1/4 chord.', tag: 'exam' },
+  { ch: 3, title: '유도항력 (Induced drag)', body: '익단 와류 → downwash → 유효 받음각 감소. Elliptic wing이 e=1로 최소. Tapered wing은 e≈0.8로 근사.', formula: 'CDi = CL²/(π·e·AR)', tag: 'exam' },
+  { ch: 3, title: 'Mach 수와 속도 영역', body: 'Subsonic M<0.8 / Transonic 0.8≤M<1.2 / Supersonic 1.2≤M<5 / Hypersonic M≥5. 음속 = 압력 전달 속도.', formula: 'M = V/a', tag: 'exam' },
+  { ch: 3, title: '천음속 비행의 역설', body: '해석 가장 어려움 (선형화 불가, 아음속·초음속 혼재). 그러나 L/D 최대 → 여객기 순항 Mach 0.8~0.9. Mdd 직전에서 순항.', tag: 'exam' },
+  { ch: 3, title: '조파항력 저감', body: '얇은 익형, 후퇴각(30°→Mcr 0.8→0.92), 가변후퇴익, Delta wing, Area rule (F-102 최초), Supercritical airfoil.', tag: 'concept' },
+  { ch: 3, title: 'Hypersonic 공력가열', body: 'Mach 6, 성층권 정체점 온도 1,500°C 이상. Thermal Protection System 필수. Detached shock이 재진입체에 유리.', formula: 'T = T₀(1 + (γ-1)M²/2)', tag: 'concept' },
+  { ch: 4, title: '5가지 하중 형태', body: 'Tension · Compression · Shear · Bending · Torsion. 항공기 구조의 기본.', tag: 'exam' },
+  { ch: 4, title: '날개 구성 4요소', body: 'Spar (전단·굽힘·비틀림 모멘트) · Rib (형상 유지, 좌굴 방지) · Stringer (외형 유지) · Skin (공력 전달).', tag: 'exam' },
+  { ch: 4, title: '피로파괴 설계 3개념', body: '안전수명설계 · 파괴안전설계 (Fail safe) · 손상허용설계. De Havilland Comet (1954) 사고가 계기 — 원형 창문 도입.', tag: 'exam' },
+  { ch: 4, title: '공탄성 (Aeroelasticity)', body: '정적: Divergence (날개 Twisting 발산). 동적: Flutter (속도↑에 따라 진동 증가), Servo aeroelasticity.', tag: 'concept' },
+  { ch: 4, title: '하중계수 Load factor', body: '여객기 3.5g, 곡예기 6g, 전투기 7~14g, 조종사 한계 9g. 극한하중 = 제한하중 × SF(1.2~1.5).', formula: 'n = L/W', tag: 'exam' },
+  { ch: 5, title: '순항 조건', body: 'L = W, T = D, T = W/(L/D). L/D 클수록 적은 추력으로 비행.', formula: 'T = W/(L/D)', tag: 'exam' },
+  { ch: 5, title: 'Brayton Cycle', body: '단열압축 → 정압연소 → 단열팽창. 가스터빈 엔진의 기본 사이클. Ramjet·Scramjet도 정압연소이므로 Brayton.', tag: 'exam' },
+  { ch: 5, title: '제트엔진 4종 비교', body: 'Turbojet (고속, 고연료) · Turbofan (민항기, Bypass 5~14) · Turboprop (Propeller + 감속기어) · Turboshaft (헬리콥터).', tag: 'exam' },
+  { ch: 5, title: 'Bypass Ratio', body: 'Fan 유량 / Core 유량. 민항기 5 이상. Geared Turbofan 최대 14. 높을수록 연료효율↑, 소음↓.', tag: 'exam' },
+  { ch: 5, title: '흡입구 (Inlet)', body: '아음속: Convergent형 확산덕트 (감속·압력↑). 초음속: 충격파 이용 (Ram effect), 날카로운 쐐기형.', tag: 'exam' },
+  { ch: 5, title: '배기 노즐 (Nozzle)', body: '아음속: Convergent. 초음속: Convergent-Divergent (de Laval). Thrust reverser로 착륙거리 단축.', tag: 'concept' },
+  { ch: 5, title: 'Ramjet vs Scramjet', body: 'Ramjet: 아음속 연소 (Mach 2~4). Scramjet: 초음속 연소 (Mach 5+). 자체 시동 불가 — 로켓 부스터 필요.', tag: 'exam' },
+  { ch: 5, title: 'Isp (비추력)', body: '단위 sec이지만 시간 개념 아님. Rocket은 Isp 낮으나 대기권 밖 가능. Airbreathing은 고도·속도 제한.', formula: 'Isp = mv/mg', tag: 'concept' },
+  { ch: 6, title: '양항비와 활공', body: '활공비 = L/D = 1/tan(활공각). 양항비가 곧 활공거리. 에너지 보존 (운동↔위치).', tag: 'exam' },
+  { ch: 6, title: 'Breguet 방정식', body: '프랑스 엔지니어 Breguet 유도 — 항속거리·체공시간 공식. 항공기 설계의 핵심. Propeller는 마력 기반, Jet은 추력 기반.', tag: 'exam' },
+  { ch: 6, title: '이착륙 접근속도', body: 'V_approach ≈ 1.2 × V_stall (설계 약속). Thrust reverser, Spoiler로 착륙거리 단축.', tag: 'exam' },
+  { ch: 7, title: '3가지 정적 안정성', body: 'Longitudinal (α 변화 → Pitch 복원), Directional (β 변화 → Yaw 복원, Vertical tail 핵심), Lateral (Roll 복원, Dihedral).', tag: 'exam' },
+  { ch: 7, title: 'Static Margin (SM)', body: 'CG와 NP 사이 거리 / MAC. 여객기 SM ≈ +15% (안정). 전투기 F-16·T-50은 SM < 0 (불안정 but 고기동).', formula: 'SM = (x_NP - x_CG)/MAC', tag: 'exam' },
+  { ch: 7, title: 'Dihedral (상반각) 효과', body: 'β 발생 시 바람 불어오는 쪽 날개 유효 받음각↑ → 양력↑ → 복원 Roll. 전투기는 Anhedral로 기동성 우선.', tag: 'exam' },
+  { ch: 7, title: '동안정성 모드', body: '세로: Short period (1~5초), Phugoid (≤30초, 운동↔위치 에너지 교환). 가로·방향: Dutch roll (3~8초), Spiral divergence.', tag: 'exam' },
+  { ch: 7, title: '조종면 3종', body: 'Elevator: Pitch 자세 제어. Rudder: Yaw 자세 제어 (Crabbing). Aileron: Roll Rate 제어만 (자세 직접 제어 불가).', tag: 'exam' },
+  { ch: 7, title: 'Adverse Yaw', body: 'Aileron 뱅크 시 내려간 쪽 날개 유도항력↑ → 원치 않는 Yaw 발생. Rudder로 보정. Spoiler·Frise·Differential aileron이 방지책.', tag: 'exam' }
+];
+
+const chTitles = {
+  '1': 'Chapter 1 · 항공우주 개요',
+  '2': 'Chapter 2 · 대기권과 비행환경',
+  '3': 'Chapter 3 · 공기역학',
+  '4': 'Chapter 4 · 구조역학',
+  '5': 'Chapter 5 · 추진역학',
+  '6': 'Chapter 6 · 비행 성능',
+  '7': 'Chapter 7 · 비행 안정성·제어'
+};
+
+const tagLabel = { exam: '시험 필수', concept: '개념 이해', ref: '참고' };
+const tagClass = { exam: 'tag-exam', concept: 'tag-concept', ref: 'tag-ref' };
+
+function render(filter) {
+  const area = document.getElementById('content-area');
+  const items = filter === 'all' ? data : data.filter(d => String(d.ch) === filter);
+  
+  let html = '';
+  if (filter === 'all') {
+    const grouped = {};
+    items.forEach(item => {
+      if (!grouped[item.ch]) grouped[item.ch] = [];
+      grouped[item.ch].push(item);
+    });
+    Object.keys(grouped).sort().forEach(ch => {
+      html += '<div style="margin-bottom: 1.5rem;">';
+      html += '<div style="font-size: 15px; font-weight: 500; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 0.5px solid var(--color-border-tertiary);">' + chTitles[ch] + '</div>';
+      grouped[ch].forEach(item => html += cardHTML(item));
+      html += '</div>';
+    });
+  } else {
+    html += '<div style="font-size: 15px; font-weight: 500; margin-bottom: 10px;">' + chTitles[filter] + '</div>';
+    items.forEach(item => html += cardHTML(item));
+  }
+  area.innerHTML = html;
+}
+
+function cardHTML(item) {
+  let h = '<div class="concept-card">';
+  h += '<div class="concept-title"><span class="ch-badge">Ch.' + item.ch + '</span>' + item.title + '</div>';
+  h += '<div class="concept-body">' + item.body + '</div>';
+  if (item.formula) h += '<div class="formula">' + item.formula + '</div>';
+  h += '<span class="tag ' + tagClass[item.tag] + '">' + tagLabel[item.tag] + '</span>';
+  h += '</div>';
+  return h;
+}
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => {
+      b.classList.remove('active');
+      b.style.background = 'transparent';
+      b.style.borderColor = 'var(--color-border-tertiary)';
+    });
+    btn.classList.add('active');
+    btn.style.background = 'var(--color-background-secondary)';
+    btn.style.borderColor = 'var(--color-border-secondary)';
+    render(btn.dataset.ch);
+  });
+});
+
+render('all');
+</script>
+</div>

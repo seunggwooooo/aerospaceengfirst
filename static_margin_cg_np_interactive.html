@@ -1,0 +1,150 @@
+<div style="padding: 1rem 0;">
+<h2 class="sr-only">Static Margin 인터랙티브 시뮬레이터 — 무게중심(CG)과 중립점(NP)의 상대 위치를 조절하여 항공기의 세로 안정성을 체감하는 도구</h2>
+
+<div style="margin-bottom: 1rem;">
+  <div style="font-size: 16px; font-weight: 500;">Static Margin 체감하기</div>
+  <div style="font-size: 13px; color: var(--color-text-secondary); margin-top: 2px;">CG 위치를 조절해 여객기와 전투기의 설계 철학을 비교해보세요</div>
+</div>
+
+<div style="background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 16px; margin-bottom: 12px;">
+  <svg viewBox="0 0 600 200" width="100%" style="display: block;">
+    <line x1="40" y1="100" x2="560" y2="100" stroke="#B4B2A9" stroke-width="0.5" stroke-dasharray="3,3"/>
+    
+    <g transform="translate(80, 100)">
+      <path d="M 0,0 L 280,0" stroke="#5F5E5A" stroke-width="2"/>
+      <path d="M 20,-8 L 260,-8 L 280,0 L 260,8 L 20,8 Z" fill="#F1EFE8" stroke="#888780" stroke-width="1"/>
+      <path d="M 90,-2 L 130,-40 L 170,-40 L 170,-2 Z" fill="#D3D1C7" stroke="#888780" stroke-width="1"/>
+      <path d="M 60,0 L 90,30 L 210,30 L 230,0 Z" fill="#B4B2A9" stroke="#5F5E5A" stroke-width="1" opacity="0.7"/>
+      <path d="M 240,0 L 260,-25 L 275,-25 L 275,0 Z" fill="#D3D1C7" stroke="#888780" stroke-width="1"/>
+    </g>
+    
+    <g id="np-marker">
+      <circle cx="280" cy="100" r="8" fill="#185FA5"/>
+      <text x="280" y="80" text-anchor="middle" font-size="11" font-weight="500" fill="#185FA5">NP</text>
+      <text x="280" y="68" text-anchor="middle" font-size="9" fill="#888780">(중립점)</text>
+    </g>
+    
+    <g id="cg-marker">
+      <circle cx="240" cy="100" r="8" fill="#D85A30"/>
+      <text x="240" y="140" text-anchor="middle" font-size="11" font-weight="500" fill="#D85A30">CG</text>
+      <text x="240" y="154" text-anchor="middle" font-size="9" fill="#888780">(무게중심)</text>
+    </g>
+    
+    <g id="sm-indicator">
+      <line x1="240" y1="118" x2="280" y2="118" stroke="#534AB7" stroke-width="1.5"/>
+      <line x1="240" y1="114" x2="240" y2="122" stroke="#534AB7" stroke-width="1.5"/>
+      <line x1="280" y1="114" x2="280" y2="122" stroke="#534AB7" stroke-width="1.5"/>
+      <text id="sm-label" x="260" y="178" text-anchor="middle" font-size="11" font-weight="500" fill="#534AB7">SM</text>
+    </g>
+    
+    <text x="100" y="180" font-size="10" fill="#888780">기수 (nose)</text>
+    <text x="500" y="180" font-size="10" fill="#888780">꼬리 (tail)</text>
+  </svg>
+</div>
+
+<div style="display: flex; align-items: center; gap: 12px; margin-bottom: 1rem;">
+  <label style="font-size: 13px; color: var(--color-text-secondary); min-width: 100px;">CG 위치 (% MAC)</label>
+  <input type="range" min="-20" max="30" value="15" step="1" id="cg-slider" style="flex: 1;" />
+  <span id="sm-value" style="font-size: 14px; font-weight: 500; min-width: 60px; text-align: right;">+15%</span>
+</div>
+
+<div id="status-box" style="padding: 14px 16px; border-radius: var(--border-radius-lg); margin-bottom: 1rem; border-left: 3px solid #1D9E75; background: #E1F5EE;">
+  <div id="status-title" style="font-size: 14px; font-weight: 500; color: #04342C;">안정한 세로축 — 여객기 타입</div>
+  <div id="status-body" style="font-size: 13px; color: #085041; margin-top: 4px; line-height: 1.6;">
+    CG가 NP 앞에 위치 (SM > 0). 교란 발생 시 복원 모멘트가 발생해 원래 자세로 돌아갑니다. 경비행기·여객기의 전형적 설계 (SM ≈ +15%). 수평미익은 하향 양력을 생성해 평형 유지.
+  </div>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 1rem;">
+  <button onclick="setCG(20)" style="padding: 10px; font-size: 12px; border: 0.5px solid var(--color-border-tertiary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">여객기<br><span style="font-size: 11px; color: var(--color-text-secondary);">SM +20%</span></button>
+  <button onclick="setCG(5)" style="padding: 10px; font-size: 12px; border: 0.5px solid var(--color-border-tertiary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">경기동 훈련기<br><span style="font-size: 11px; color: var(--color-text-secondary);">SM +5%</span></button>
+  <button onclick="setCG(-10)" style="padding: 10px; font-size: 12px; border: 0.5px solid var(--color-border-tertiary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">고기동 전투기<br><span style="font-size: 11px; color: var(--color-text-secondary);">SM −10%</span></button>
+</div>
+
+<div style="background: var(--color-background-secondary); padding: 12px 14px; border-radius: var(--border-radius-lg); font-size: 13px; color: var(--color-text-secondary); line-height: 1.6;">
+  <div style="font-weight: 500; color: var(--color-text-primary); margin-bottom: 4px;">핵심 공식</div>
+  <span style="font-family: var(--font-mono); background: var(--color-background-primary); padding: 4px 8px; border-radius: 4px;">SM = (x<sub>NP</sub> − x<sub>CG</sub>) / MAC</span>
+  <div style="margin-top: 6px;">
+    SM이 클수록 안정성↑, 기동성↓. F-16, T-50 같은 고기동 전투기는 <strong style="font-weight: 500;">음의 SM</strong>으로 설계해 반응성을 극대화하며, 대신 Fly-by-Wire 시스템으로 불안정성을 실시간 제어합니다.
+  </div>
+</div>
+
+<div style="margin-top: 1rem; display: flex; gap: 8px; flex-wrap: wrap;">
+  <button onclick="sendPrompt('F-16과 T-50이 음의 Static Margin으로 설계되는 이유와 Fly-by-Wire의 역할을 자세히 설명해줘')" style="padding: 8px 14px; font-size: 13px; border: 0.5px solid var(--color-border-secondary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">전투기 음의 SM 설계 ↗</button>
+  <button onclick="sendPrompt('Phugoid motion과 Short period motion의 물리적 의미 차이를 설명해줘')" style="padding: 8px 14px; font-size: 13px; border: 0.5px solid var(--color-border-secondary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">Phugoid vs Short period ↗</button>
+</div>
+
+<script>
+const slider = document.getElementById('cg-slider');
+const smValue = document.getElementById('sm-value');
+const statusBox = document.getElementById('status-box');
+const statusTitle = document.getElementById('status-title');
+const statusBody = document.getElementById('status-body');
+const cgMarker = document.getElementById('cg-marker');
+const smIndicator = document.getElementById('sm-indicator');
+const smLabel = document.getElementById('sm-label');
+
+const NP_X = 280;
+
+function update(sm) {
+  const roundedSM = Math.round(sm);
+  smValue.textContent = (roundedSM >= 0 ? '+' : '') + roundedSM + '%';
+  
+  const cgX = NP_X - sm * 2;
+  
+  cgMarker.querySelector('circle').setAttribute('cx', cgX);
+  cgMarker.querySelectorAll('text').forEach(t => t.setAttribute('x', cgX));
+  
+  const lines = smIndicator.querySelectorAll('line');
+  const minX = Math.min(cgX, NP_X);
+  const maxX = Math.max(cgX, NP_X);
+  lines[0].setAttribute('x1', minX);
+  lines[0].setAttribute('x2', maxX);
+  lines[1].setAttribute('x1', cgX);
+  lines[1].setAttribute('x2', cgX);
+  lines[2].setAttribute('x1', NP_X);
+  lines[2].setAttribute('x2', NP_X);
+  smLabel.setAttribute('x', (minX + maxX) / 2);
+  smLabel.textContent = 'SM = ' + (roundedSM >= 0 ? '+' : '') + roundedSM + '%';
+  
+  if (sm > 10) {
+    statusBox.style.background = '#E1F5EE';
+    statusBox.style.borderLeftColor = '#1D9E75';
+    statusTitle.style.color = '#04342C';
+    statusBody.style.color = '#085041';
+    statusTitle.textContent = '매우 안정 — 여객기·경비행기 타입';
+    statusBody.textContent = 'CG가 NP보다 충분히 앞에 위치. 복원력이 강하지만 조종 반응이 느리고 기동성이 낮습니다. 민간 여객기의 전형적 설계 (SM ≈ +15~20%).';
+  } else if (sm > 0) {
+    statusBox.style.background = '#E6F1FB';
+    statusBox.style.borderLeftColor = '#378ADD';
+    statusTitle.style.color = '#042C53';
+    statusBody.style.color = '#0C447C';
+    statusTitle.textContent = '적당히 안정 — 훈련기·곡예기 타입';
+    statusBody.textContent = 'SM이 작아 조종 반응이 빠르면서도 안정성이 유지됩니다. 훈련기나 경곡예기의 균형잡힌 설계.';
+  } else if (sm === 0) {
+    statusBox.style.background = '#F1EFE8';
+    statusBox.style.borderLeftColor = '#888780';
+    statusTitle.style.color = '#2C2C2A';
+    statusBody.style.color = '#444441';
+    statusTitle.textContent = '중립 — 마지널 한계';
+    statusBody.textContent = 'CG가 NP와 일치. 교란 후 복원도 발산도 없는 마지널 상태. 실제 설계에서는 피해야 할 영역.';
+  } else {
+    statusBox.style.background = '#FAECE7';
+    statusBox.style.borderLeftColor = '#D85A30';
+    statusTitle.style.color = '#4A1B0C';
+    statusBody.style.color = '#712B13';
+    statusTitle.textContent = '불안정 — 고기동 전투기 타입';
+    statusBody.textContent = 'CG가 NP 뒤에 위치. 본질적으로 불안정하지만 Fly-by-Wire 제어 시스템으로 극한 기동성을 확보합니다. F-16, T-50 같은 현대 전투기의 설계 철학.';
+  }
+}
+
+slider.addEventListener('input', (e) => update(Number(e.target.value)));
+
+function setCG(val) {
+  slider.value = val;
+  update(val);
+}
+
+update(15);
+</script>
+</div>

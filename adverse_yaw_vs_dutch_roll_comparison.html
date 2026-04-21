@@ -1,0 +1,295 @@
+<div style="padding: 1rem 0;">
+<h2 class="sr-only">Adverse Yaw와 Dutch Roll의 차이를 탑뷰 애니메이션으로 비교하는 인터랙티브 시뮬레이터</h2>
+
+<div style="margin-bottom: 1.25rem;">
+  <div style="font-size: 16px; font-weight: 500;">Adverse Yaw vs Dutch Roll</div>
+  <div style="font-size: 13px; color: var(--color-text-secondary); margin-top: 2px;">조종 입력 vs 자연 진동 — 탑뷰로 비교해보세요</div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 1rem;">
+  <button id="btn-adverse" class="mode-btn active" style="padding: 12px; font-size: 13px; font-weight: 500; border: 0.5px solid var(--color-border-secondary); background: #FAECE7; color: #712B13; border-radius: var(--border-radius-md); cursor: pointer;">Adverse Yaw<br><span style="font-size: 11px; font-weight: 400;">조종 입력 문제</span></button>
+  <button id="btn-dutch" class="mode-btn" style="padding: 12px; font-size: 13px; font-weight: 500; border: 0.5px solid var(--color-border-tertiary); background: transparent; color: var(--color-text-secondary); border-radius: var(--border-radius-md); cursor: pointer;">Dutch Roll<br><span style="font-size: 11px; font-weight: 400;">동안정성 진동</span></button>
+</div>
+
+<div style="background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 16px; margin-bottom: 12px; position: relative;">
+  <div style="font-size: 11px; color: var(--color-text-tertiary); position: absolute; top: 10px; left: 14px;">TOP VIEW · 비행 방향 ↑</div>
+  <svg id="stage" viewBox="0 0 600 320" width="100%" style="display: block;">
+    <defs>
+      <marker id="arrow-red" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M 0,0 L 10,5 L 0,10 z" fill="#D85A30"/>
+      </marker>
+      <marker id="arrow-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M 0,0 L 10,5 L 0,10 z" fill="#378ADD"/>
+      </marker>
+      <marker id="arrow-purple" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M 0,0 L 10,5 L 0,10 z" fill="#7F77DD"/>
+      </marker>
+    </defs>
+    
+    <path id="flight-path" d="M 300,280 L 300,280" stroke="#B4B2A9" stroke-width="1" stroke-dasharray="4,3" fill="none"/>
+    
+    <g id="aircraft" transform="translate(300, 160)">
+      <g id="aircraft-body">
+        <path d="M 0,-50 L -10,-15 L -65,-5 L -65,10 L -10,5 L -8,25 L -22,30 L -22,38 L 0,34 L 22,38 L 22,30 L 8,25 L 10,5 L 65,10 L 65,-5 L 10,-15 Z" fill="#D3D1C7" stroke="#5F5E5A" stroke-width="1"/>
+        <circle cx="0" cy="-30" r="3" fill="#5F5E5A"/>
+        <g id="left-aileron-marker" opacity="0">
+          <rect x="-58" y="8" width="20" height="4" fill="#D85A30"/>
+        </g>
+        <g id="right-aileron-marker" opacity="0">
+          <rect x="38" y="8" width="20" height="4" fill="#378ADD"/>
+        </g>
+      </g>
+    </g>
+    
+    <g id="force-indicators" opacity="0">
+      <g id="left-drag">
+        <line x1="235" y1="170" x2="195" y2="170" stroke="#D85A30" stroke-width="2" marker-end="url(#arrow-red)"/>
+        <text x="215" y="160" font-size="10" fill="#712B13" text-anchor="middle">Drag ↑</text>
+      </g>
+      <g id="right-drag">
+        <line x1="365" y1="170" x2="395" y2="170" stroke="#378ADD" stroke-width="1.5" marker-end="url(#arrow-blue)" opacity="0.5"/>
+        <text x="380" y="160" font-size="10" fill="#0C447C" text-anchor="middle">Drag ↓</text>
+      </g>
+    </g>
+    
+    <g id="yaw-indicator" opacity="0">
+      <path id="yaw-arc" d="M 280,100 A 25 25 0 0 0 320,100" stroke="#7F77DD" stroke-width="2" fill="none" marker-end="url(#arrow-purple)"/>
+      <text id="yaw-label" x="300" y="85" font-size="11" fill="#3C3489" text-anchor="middle" font-weight="500">Yaw</text>
+    </g>
+    
+    <g id="status-panel">
+      <rect x="20" y="20" width="160" height="50" rx="6" fill="#F1EFE8" opacity="0.9"/>
+      <text x="30" y="38" font-size="11" fill="#5F5E5A">상태</text>
+      <text id="status-text" x="30" y="58" font-size="13" fill="#2C2C2A" font-weight="500">대기 중</text>
+    </g>
+    
+    <g id="time-panel">
+      <rect x="420" y="20" width="160" height="50" rx="6" fill="#F1EFE8" opacity="0.9"/>
+      <text x="430" y="38" font-size="11" fill="#5F5E5A">시간 / 주기</text>
+      <text id="time-text" x="430" y="58" font-size="13" fill="#2C2C2A" font-weight="500">0.0 s</text>
+    </g>
+  </svg>
+</div>
+
+<div style="display: flex; gap: 8px; margin-bottom: 1rem;">
+  <button id="btn-trigger" style="flex: 1; padding: 12px; font-size: 13px; font-weight: 500; border: 0.5px solid var(--color-border-secondary); background: var(--color-background-secondary); border-radius: var(--border-radius-md); cursor: pointer;">▶ Aileron 조작 (오른쪽 뱅크)</button>
+  <button id="btn-reset" style="padding: 12px 20px; font-size: 13px; border: 0.5px solid var(--color-border-tertiary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">↺ 리셋</button>
+</div>
+
+<div id="explain-adverse" class="explain-box" style="padding: 14px 16px; border-radius: var(--border-radius-lg); background: #FAECE7; border-left: 3px solid #D85A30;">
+  <div style="font-size: 14px; font-weight: 500; color: #4A1B0C; margin-bottom: 8px;">Adverse Yaw — 조종 입력이 만드는 문제</div>
+  <div style="font-size: 13px; color: #712B13; line-height: 1.7;">
+    조종사가 오른쪽 뱅크를 위해 Aileron을 조작하는 순간, 왼쪽 날개 양력↑ = 유도항력↑ → 왼쪽 날개가 뒤로 당겨짐 → 기수가 <strong style="font-weight: 500;">의도와 반대인 왼쪽으로 Yaw</strong>. 조종사는 선회 방향(오른쪽)으로 Rudder를 밟아 상쇄해야 합니다.
+  </div>
+  <div style="display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap;">
+    <span style="font-size: 11px; padding: 3px 10px; background: #F5C4B3; color: #4A1B0C; border-radius: 10px;">성격: 조종성</span>
+    <span style="font-size: 11px; padding: 3px 10px; background: #F5C4B3; color: #4A1B0C; border-radius: 10px;">원인: 유도항력 차</span>
+    <span style="font-size: 11px; padding: 3px 10px; background: #F5C4B3; color: #4A1B0C; border-radius: 10px;">주기: 없음</span>
+    <span style="font-size: 11px; padding: 3px 10px; background: #F5C4B3; color: #4A1B0C; border-radius: 10px;">대응: Rudder · Frise · Differential</span>
+  </div>
+</div>
+
+<div id="explain-dutch" class="explain-box" style="display: none; padding: 14px 16px; border-radius: var(--border-radius-lg); background: #EEEDFE; border-left: 3px solid #7F77DD;">
+  <div style="font-size: 14px; font-weight: 500; color: #26215C; margin-bottom: 8px;">Dutch Roll — 스스로 일어나는 진동</div>
+  <div style="font-size: 13px; color: #3C3489; line-height: 1.7;">
+    돌풍 같은 외란으로 β(옆미끄럼각) 발생 → Vertical tail이 복원 Yaw → 관성으로 오버슛 → 반대 β → 상반각·후퇴각이 Roll 유발 → 다시 β 생성 → <strong style="font-weight: 500;">Roll과 Yaw가 맞물려 3~8초 주기로 지속 진동</strong>. Roll stability > Yaw stability일 때 발생.
+  </div>
+  <div style="display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap;">
+    <span style="font-size: 11px; padding: 3px 10px; background: #CECBF6; color: #26215C; border-radius: 10px;">성격: 동안정성</span>
+    <span style="font-size: 11px; padding: 3px 10px; background: #CECBF6; color: #26215C; border-radius: 10px;">원인: Roll-Yaw 결합</span>
+    <span style="font-size: 11px; padding: 3px 10px; background: #CECBF6; color: #26215C; border-radius: 10px;">주기: 3~8초</span>
+    <span style="font-size: 11px; padding: 3px 10px; background: #CECBF6; color: #26215C; border-radius: 10px;">대응: Yaw Damper</span>
+  </div>
+</div>
+
+<div style="margin-top: 1rem; background: var(--color-background-secondary); padding: 12px 14px; border-radius: var(--border-radius-lg);">
+  <div style="font-size: 13px; font-weight: 500; margin-bottom: 8px;">핵심 비교</div>
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 12px;">
+    <div>
+      <div style="color: #712B13; font-weight: 500; margin-bottom: 4px;">Adverse Yaw</div>
+      <div style="color: var(--color-text-secondary); line-height: 1.6;">조종사가 Aileron 칠 때 즉시 발생 · Yaw 한 방향 · 조작 중에만 지속</div>
+    </div>
+    <div>
+      <div style="color: #3C3489; font-weight: 500; margin-bottom: 4px;">Dutch Roll</div>
+      <div style="color: var(--color-text-secondary); line-height: 1.6;">외란 후 자연 발생 · Roll–Yaw 8자 궤적 · 감쇠될 때까지 반복</div>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top: 1rem; display: flex; gap: 8px; flex-wrap: wrap;">
+  <button onclick="sendPrompt('Spiral divergence와 Dutch roll이 왜 트레이드오프 관계인지, 두 모드의 발생 조건을 Roll/Yaw 안정성 관점에서 설명해줘')" style="padding: 8px 14px; font-size: 13px; border: 0.5px solid var(--color-border-secondary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">Spiral vs Dutch Roll ↗</button>
+  <button onclick="sendPrompt('Yaw Damper는 어떤 원리로 Dutch Roll을 감쇠시키는지, SAS(Stability Augmentation System)의 역할과 함께 설명해줘')" style="padding: 8px 14px; font-size: 13px; border: 0.5px solid var(--color-border-secondary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">Yaw Damper 원리 ↗</button>
+</div>
+
+<style>
+.mode-btn.active { box-shadow: 0 0 0 0.5px var(--color-border-secondary); }
+</style>
+
+<script>
+let mode = 'adverse';
+let animId = null;
+let startTime = null;
+
+const aircraft = document.getElementById('aircraft');
+const flightPath = document.getElementById('flight-path');
+const forceInd = document.getElementById('force-indicators');
+const yawInd = document.getElementById('yaw-indicator');
+const yawArc = document.getElementById('yaw-arc');
+const yawLabel = document.getElementById('yaw-label');
+const leftAil = document.getElementById('left-aileron-marker');
+const rightAil = document.getElementById('right-aileron-marker');
+const statusText = document.getElementById('status-text');
+const timeText = document.getElementById('time-text');
+const btnAdverse = document.getElementById('btn-adverse');
+const btnDutch = document.getElementById('btn-dutch');
+const btnTrigger = document.getElementById('btn-trigger');
+const btnReset = document.getElementById('btn-reset');
+const explainAdverse = document.getElementById('explain-adverse');
+const explainDutch = document.getElementById('explain-dutch');
+
+const pathPoints = [];
+
+function reset() {
+  if (animId) cancelAnimationFrame(animId);
+  animId = null;
+  startTime = null;
+  pathPoints.length = 0;
+  aircraft.setAttribute('transform', 'translate(300, 160) rotate(0)');
+  flightPath.setAttribute('d', 'M 300,280 L 300,280');
+  forceInd.style.opacity = 0;
+  yawInd.style.opacity = 0;
+  leftAil.setAttribute('opacity', 0);
+  rightAil.setAttribute('opacity', 0);
+  statusText.textContent = '대기 중';
+  timeText.textContent = '0.0 s';
+}
+
+function setMode(newMode) {
+  mode = newMode;
+  reset();
+  if (newMode === 'adverse') {
+    btnAdverse.classList.add('active');
+    btnAdverse.style.background = '#FAECE7';
+    btnAdverse.style.color = '#712B13';
+    btnAdverse.style.borderColor = 'var(--color-border-secondary)';
+    btnDutch.classList.remove('active');
+    btnDutch.style.background = 'transparent';
+    btnDutch.style.color = 'var(--color-text-secondary)';
+    btnDutch.style.borderColor = 'var(--color-border-tertiary)';
+    btnTrigger.textContent = '▶ Aileron 조작 (오른쪽 뱅크)';
+    explainAdverse.style.display = 'block';
+    explainDutch.style.display = 'none';
+  } else {
+    btnDutch.classList.add('active');
+    btnDutch.style.background = '#EEEDFE';
+    btnDutch.style.color = '#3C3489';
+    btnDutch.style.borderColor = 'var(--color-border-secondary)';
+    btnAdverse.classList.remove('active');
+    btnAdverse.style.background = 'transparent';
+    btnAdverse.style.color = 'var(--color-text-secondary)';
+    btnAdverse.style.borderColor = 'var(--color-border-tertiary)';
+    btnTrigger.textContent = '▶ 돌풍 외란 발생';
+    explainDutch.style.display = 'block';
+    explainAdverse.style.display = 'none';
+  }
+}
+
+function animate(ts) {
+  if (!startTime) startTime = ts;
+  const t = (ts - startTime) / 1000;
+  timeText.textContent = t.toFixed(1) + ' s';
+  
+  let cx = 300, cy = 160, heading = 0;
+  
+  if (mode === 'adverse') {
+    if (t < 0.5) {
+      statusText.textContent = 'Aileron 입력';
+      leftAil.setAttribute('opacity', 1);
+      rightAil.setAttribute('opacity', 1);
+    } else if (t < 2.5) {
+      statusText.textContent = '유도항력 차 발생';
+      forceInd.style.opacity = Math.min(1, (t - 0.5) / 0.5);
+      heading = -Math.min(18, (t - 0.5) * 12);
+      yawInd.style.opacity = Math.min(1, (t - 0.8) / 0.5);
+      yawArc.setAttribute('d', 'M 320,100 A 30 30 0 0 1 280,100');
+      yawLabel.textContent = '← Adverse Yaw';
+    } else if (t < 4) {
+      statusText.textContent = 'Rudder로 상쇄';
+      heading = -18 + (t - 2.5) * 12;
+      yawArc.setAttribute('d', 'M 280,100 A 30 30 0 0 0 320,100');
+      yawLabel.textContent = 'Rudder →';
+    } else {
+      statusText.textContent = '복원 완료';
+      heading = 0;
+      leftAil.setAttribute('opacity', 0);
+      rightAil.setAttribute('opacity', 0);
+      forceInd.style.opacity = Math.max(0, 1 - (t - 4));
+      yawInd.style.opacity = Math.max(0, 1 - (t - 4));
+      if (t > 5.5) { cancelAnimationFrame(animId); animId = null; return; }
+    }
+    cx = 300 + heading * 0.8;
+    cy = 160 - (t * 15);
+    if (cy < 40) cy = 40;
+  } else {
+    if (t < 0.3) {
+      statusText.textContent = '돌풍 외란';
+    } else if (t < 0.8) {
+      statusText.textContent = 'β 발생';
+    } else {
+      const period = 4;
+      const cycle = Math.floor((t - 0.3) / period);
+      const phase = ((t - 0.3) % period) / period;
+      if (phase < 0.25) statusText.textContent = 'Vertical tail 복원';
+      else if (phase < 0.5) statusText.textContent = '오버슛';
+      else if (phase < 0.75) statusText.textContent = 'Dihedral이 Roll 유발';
+      else statusText.textContent = '반대 β 생성';
+    }
+    
+    const decay = Math.exp(-t / 8);
+    const yawAngle = Math.sin((t - 0.3) * 1.6) * 20 * decay;
+    const rollOffset = Math.sin((t - 0.3) * 1.6 - Math.PI / 2) * 25 * decay;
+    heading = yawAngle;
+    cx = 300 + rollOffset;
+    cy = 160 - t * 10;
+    if (cy < 40) cy = 40;
+    
+    yawInd.style.opacity = Math.min(1, t / 0.5) * decay;
+    const ax = cx;
+    if (yawAngle > 0) {
+      yawArc.setAttribute('d', 'M ' + (ax - 20) + ',100 A 25 25 0 0 0 ' + (ax + 20) + ',100');
+      yawLabel.textContent = 'Yaw →';
+    } else {
+      yawArc.setAttribute('d', 'M ' + (ax + 20) + ',100 A 25 25 0 0 1 ' + (ax - 20) + ',100');
+      yawLabel.textContent = '← Yaw';
+    }
+    yawLabel.setAttribute('x', ax);
+    
+    if (t > 12) { cancelAnimationFrame(animId); animId = null; statusText.textContent = '감쇠 완료'; return; }
+  }
+  
+  aircraft.setAttribute('transform', 'translate(' + cx + ', ' + cy + ') rotate(' + heading + ')');
+  
+  pathPoints.push([cx, cy]);
+  if (pathPoints.length > 1) {
+    let d = 'M ' + pathPoints[0][0] + ',' + pathPoints[0][1];
+    for (let i = 1; i < pathPoints.length; i++) {
+      d += ' L ' + pathPoints[i][0] + ',' + pathPoints[i][1];
+    }
+    flightPath.setAttribute('d', d);
+  }
+  
+  animId = requestAnimationFrame(animate);
+}
+
+btnAdverse.addEventListener('click', () => setMode('adverse'));
+btnDutch.addEventListener('click', () => setMode('dutch'));
+btnTrigger.addEventListener('click', () => {
+  reset();
+  startTime = null;
+  animId = requestAnimationFrame(animate);
+});
+btnReset.addEventListener('click', reset);
+
+reset();
+</script>
+</div>

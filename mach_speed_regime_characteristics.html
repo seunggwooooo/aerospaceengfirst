@@ -1,0 +1,129 @@
+<div style="padding: 1rem 0;">
+<h2 class="sr-only">Mach 수 속도 영역별 비행 특성 차트 — 항력계수와 양항비가 속도에 따라 어떻게 변하는지 보여주는 시각화</h2>
+
+<div style="margin-bottom: 1rem;">
+  <div style="font-size: 16px; font-weight: 500;">Mach 수 영역별 비행 특성</div>
+  <div style="font-size: 13px; color: var(--color-text-secondary); margin-top: 2px;">항력계수(CD)와 양항비(L/D)의 Mach 의존성</div>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 10px; font-size: 12px; color: var(--color-text-secondary);">
+  <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 20px; height: 3px; background: #D85A30;"></span>항력계수 CD</span>
+  <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 20px; height: 3px; background: #1D9E75; border-top: 2px dashed #1D9E75; background: transparent;"></span>양항비 L/D</span>
+</div>
+
+<div style="position: relative; width: 100%; height: 280px; margin-bottom: 1rem;">
+  <canvas id="machChart" role="img" aria-label="Mach 수 0에서 6까지의 항력계수와 양항비 변화 차트. 천음속 영역인 Mach 0.8~1.2에서 항력이 급격히 증가하고 양항비는 Mach 0.85 근처에서 최대값을 기록한다.">
+    항력계수는 Mach 0.8까지 낮게 유지되다가 천음속 영역에서 급증하며, 양항비는 Mach 0.85 근처에서 최대 20에 도달한 후 급감합니다.
+  </canvas>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 1rem;">
+  <div style="background: #E6F1FB; padding: 10px 12px; border-radius: var(--border-radius-md);">
+    <div style="font-size: 11px; color: #0C447C;">Subsonic</div>
+    <div style="font-size: 13px; font-weight: 500; color: #042C53;">M &lt; 0.8</div>
+    <div style="font-size: 11px; color: #185FA5; margin-top: 2px;">저항력 · 선형</div>
+  </div>
+  <div style="background: #FAECE7; padding: 10px 12px; border-radius: var(--border-radius-md);">
+    <div style="font-size: 11px; color: #712B13;">Transonic</div>
+    <div style="font-size: 13px; font-weight: 500; color: #4A1B0C;">0.8 ≤ M &lt; 1.2</div>
+    <div style="font-size: 11px; color: #993C1D; margin-top: 2px;">충격파 · L/D 최대</div>
+  </div>
+  <div style="background: #FAEEDA; padding: 10px 12px; border-radius: var(--border-radius-md);">
+    <div style="font-size: 11px; color: #633806;">Supersonic</div>
+    <div style="font-size: 13px; font-weight: 500; color: #412402;">1.2 ≤ M &lt; 5</div>
+    <div style="font-size: 11px; color: #854F0B; margin-top: 2px;">조파항력 · 후퇴익</div>
+  </div>
+  <div style="background: #FCEBEB; padding: 10px 12px; border-radius: var(--border-radius-md);">
+    <div style="font-size: 11px; color: #791F1F;">Hypersonic</div>
+    <div style="font-size: 13px; font-weight: 500; color: #501313;">M ≥ 5</div>
+    <div style="font-size: 11px; color: #A32D2D; margin-top: 2px;">공력가열 · TPS</div>
+  </div>
+</div>
+
+<div style="background: var(--color-background-secondary); padding: 12px 14px; border-radius: var(--border-radius-lg); font-size: 13px; color: var(--color-text-secondary); line-height: 1.6;">
+  <div style="font-weight: 500; color: var(--color-text-primary); margin-bottom: 4px;">여객기는 왜 천음속에서 순항할까?</div>
+  Mach 0.85 근처에서 양항비 L/D가 최대가 되기 때문입니다. 연료 소모 최소화 = 같은 추력으로 최대 거리 비행. 단, Drag Divergence Mach Number(Mdd) 직전에서 머물러야 충격파 발생을 피할 수 있어, 날개를 잘 설계할수록 Mdd를 높여 더 빠른 순항 속도가 가능합니다.
+</div>
+
+<div style="margin-top: 1rem; display: flex; gap: 8px; flex-wrap: wrap;">
+  <button onclick="sendPrompt('Drag Divergence Mach Number(Mdd)를 높이는 설계 기법들 — 후퇴각, Supercritical airfoil, Area rule을 자세히 설명해줘')" style="padding: 8px 14px; font-size: 13px; border: 0.5px solid var(--color-border-secondary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">Mdd 설계 기법 ↗</button>
+  <button onclick="sendPrompt('Hypersonic 공력가열 공식 T = T₀(1 + (γ-1)M²/2)의 유도 과정과 TPS 설계 원리를 설명해줘')" style="padding: 8px 14px; font-size: 13px; border: 0.5px solid var(--color-border-secondary); background: transparent; border-radius: var(--border-radius-md); cursor: pointer;">공력가열 · TPS ↗</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+const machValues = [0, 0.2, 0.4, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.2, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0];
+const cdValues = [0.022, 0.022, 0.023, 0.024, 0.026, 0.028, 0.032, 0.045, 0.075, 0.14, 0.22, 0.20, 0.17, 0.13, 0.10, 0.08, 0.07, 0.065, 0.06, 0.058, 0.057];
+const ldValues = [12, 16, 18, 19, 19.5, 19.8, 20, 20.2, 18, 11, 6, 5, 5.5, 6.5, 7, 6.5, 6, 5.5, 5, 4.5, 4];
+
+new Chart(document.getElementById('machChart'), {
+  type: 'line',
+  data: {
+    labels: machValues,
+    datasets: [
+      {
+        label: 'CD (항력계수)',
+        data: cdValues,
+        borderColor: '#D85A30',
+        backgroundColor: 'rgba(216, 90, 48, 0.08)',
+        borderWidth: 2,
+        tension: 0.3,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        yAxisID: 'y'
+      },
+      {
+        label: 'L/D (양항비)',
+        data: ldValues,
+        borderColor: '#1D9E75',
+        backgroundColor: 'rgba(29, 158, 117, 0.08)',
+        borderWidth: 2,
+        borderDash: [6, 4],
+        tension: 0.3,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        yAxisID: 'y1'
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          title: (ctx) => 'Mach ' + ctx[0].label,
+          label: (ctx) => ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(2)
+        }
+      }
+    },
+    scales: {
+      x: {
+        type: 'linear',
+        title: { display: true, text: 'Mach 수 (M∞)', font: { size: 12 } },
+        min: 0, max: 6,
+        grid: { color: 'rgba(128,128,128,0.1)' }
+      },
+      y: {
+        type: 'linear',
+        position: 'left',
+        title: { display: true, text: 'CD', font: { size: 12 }, color: '#D85A30' },
+        min: 0, max: 0.25,
+        ticks: { color: '#D85A30' },
+        grid: { color: 'rgba(128,128,128,0.1)' }
+      },
+      y1: {
+        type: 'linear',
+        position: 'right',
+        title: { display: true, text: 'L/D', font: { size: 12 }, color: '#1D9E75' },
+        min: 0, max: 25,
+        ticks: { color: '#1D9E75' },
+        grid: { drawOnChartArea: false }
+      }
+    }
+  }
+});
+</script>
+</div>
