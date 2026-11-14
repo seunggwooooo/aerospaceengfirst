@@ -90,7 +90,7 @@ function activate(i) {
   }
   setTool('select');
   if (window.innerWidth > 760) $('panel').hidden = false;
-  if (!isBoard(doc) && !isSheet(doc) && !$('checkBody').hidden) showPanel('props');
+  if (!isBoard(doc) && !isSheet(doc) && (!$('checkBody').hidden || !$('partsBody').hidden)) showPanel('props');
   if (isSheet(doc) && !$('layersBody').hidden) showPanel('props');
   resize();
   if (t.view) Object.assign(view, t.view); else fit();
@@ -248,7 +248,7 @@ function restoreText(text) {
   if (old.kind === 'pcb') PcbDoc.savedVisibility = Object.fromEntries(old.layers.map((l) => [l.name, l.visible]));
   const doc = makeDoc(text);
   doc.grid = old.grid;
-  if (old.kind === 'pcb') { doc.showZoneFill = old.showZoneFill; doc.hlNet = old.hlNet; doc.route = old.route; }
+  if (old.kind === 'pcb') { doc.showZoneFill = old.showZoneFill; doc.showPadLabels = old.showPadLabels; doc.showValues = old.showValues; doc.hlNet = old.hlNet; doc.route = old.route; }
   if (old.isLibFile) doc.showLibSymbol(old.currentSymbol);
   state.doc = doc;
   state.sel = [];
@@ -449,6 +449,11 @@ function drawStart(g, tol) {
   const doc = state.doc;
   if (state.tool === 'route') {
     g.a0 = doc.anchorAt(g.wx, g.wy, tol, doc.route.layer);
+    if (g.a0 && g.a0.net) {   // light up everything on this net: these are the places it may go
+      g.hl = { prev: doc.hlNet };
+      doc.hlNet = g.a0.net;
+      $('hint').textContent = `${g.a0.name || '시작점'} · 네트 ${g.a0.net} — 밝게 표시된 곳이 같은 네트입니다`;
+    }
     g.p0 = g.a0 ? [g.a0.x, g.a0.y] : [snap(g.wx, doc.grid), snap(g.wy, doc.grid)];
   } else g.p0 = [snap(g.wx, doc.grid), snap(g.wy, doc.grid)];
 }
@@ -468,8 +473,16 @@ function drawMove(g, wx, wy, tol) {
   }
 }
 
+function routeDone(g) {
+  if (!g || !g.hl) return;
+  state.doc.hlNet = g.hl.prev;
+  g.hl = null;
+  $('hint').textContent = HINTS[state.tool] || '';
+}
+
 function drawEnd(g) {
   const doc = state.doc;
+  routeDone(g);
   const p = state.preview;
   state.preview = null;
   if (!p) return;
@@ -490,7 +503,7 @@ function drawEnd(g) {
     if (bad) { state.marker = bad; toast('DRC: ' + bad.msg, true); }
     else if (n0 && n1 && n0 !== n1) toast(`서로 다른 네트를 이었습니다: ${n0} ↔ ${n1}`, true);
     else if (!net) toast('네트가 없는 배선입니다. 패드나 기존 배선에서 시작하면 네트가 지정됩니다.');
-    else toast(`${net} 배선 추가 · DRC 통과`);
+    else toast(`${net}: ${(g.a0 && g.a0.name) || '시작점'} → ${(g.a1 && g.a1.name) || '끝점'} · DRC 통과`);
     refreshUi();
     return;
   }
@@ -608,7 +621,7 @@ function endGesture(cancel) {
   gesture = null;
   if (!g) return;
   if (g.mode === 'draw') {
-    if (cancel) { state.preview = null; requestDraw(); } else drawEnd(g);
+    if (cancel) { routeDone(g); state.preview = null; requestDraw(); } else drawEnd(g);
   } else if ((g.mode === 'move' || g.mode === 'handle') && g.started) changed();
 }
 
@@ -619,7 +632,7 @@ function pointerUp(e) {
   const g = gesture;
   if (!g) return;
   if (g.mode === 'pinch') { if (pointers.size < 2) gesture = null; return; }
-  if (!g.moved && e.type === 'pointerup') { gesture = null; state.preview = null; tap(sx, sy, g); return; }
+  if (!g.moved && e.type === 'pointerup') { gesture = null; routeDone(g); state.preview = null; tap(sx, sy, g); return; }
   endGesture(e.type !== 'pointerup');
 }
 cv.addEventListener('pointerup', pointerUp);
@@ -760,6 +773,7 @@ function showPanel(tab) {
     $('propsBody').hidden = tab !== 'props';
     $('layersBody').hidden = tab !== 'layers';
     $('checkBody').hidden = tab !== 'check';
+    $('partsBody').hidden = tab !== 'parts';
   }
   resize();
 }
@@ -920,6 +934,14 @@ function el(tag, attrs, ...kids) {
 function fieldEl(f) {
   const wrap = el('label', { class: 'field' }, el('span', null, f.label));
   if (f.type === 'info') { wrap.append(el('div', { class: 'info' }, f.value)); return wrap; }
+  if (f.type === 'link') { wrap.append(el('a', { class: 'info', href: f.value, target: '_blank', rel: 'noopener' }, f.value)); return wrap; }
+  if (f.type === 'table') {
+    const box = el('div', { class: 'field' }, el('span', null, f.label));
+    const table = el('table', { class: 'pins' }, el('tr', null, ...f.head.map((h) => el('th', null, h))));
+    for (const r of f.rows) table.append(el('tr', null, ...r.map((c) => el('td', null, c))));
+    box.append(table);
+    return box;
+  }
   let input;
   if (f.type === 'select') {
     input = el('select');
@@ -1057,9 +1079,41 @@ function renderLayers() {
     body.append(el('button', { class: 'layer' + (l.visible ? '' : ' off'), onclick() { l.visible = !l.visible; refreshUi(); } },
       el('i', { style: 'background:' + l.color }), l.name));
   }
+  body.append(el('button', { class: 'panel-btn' + (doc.showPadLabels ? ' on' : ''), style: 'margin-top:10px', onclick() { doc.showPadLabels = !doc.showPadLabels; refreshUi(); } },
+    doc.showPadLabels ? '패드 번호·네트 이름 표시 중' : '패드 번호·네트 이름 숨김'));
   if (!doc.isFootprintFile) {
+    body.append(el('button', { class: 'panel-btn' + (doc.showValues ? ' on' : ''), onclick() { doc.showValues = !doc.showValues; refreshUi(); } },
+      doc.showValues ? '부품 값 표시 중' : '부품 값 숨김'));
     body.append(el('button', { class: 'panel-btn' + (doc.showZoneFill ? ' on' : ''), style: 'margin-top:10px', onclick() { doc.showZoneFill = !doc.showZoneFill; refreshUi(); } },
       doc.showZoneFill ? '영역 채움 표시 중' : '영역 채움 숨김'));
+  }
+}
+
+function selectAndShow(it) {
+  state.sel = [it];
+  state.marker = null;
+  state.padInfo = null;
+  const b = it.bb;
+  if (b) {
+    const k = Math.max(view.k, Math.min(40, 0.35 * Math.min(view.w, view.h) / Math.max(b[2] - b[0], b[3] - b[1], 1)));
+    view.k = k;
+    view.tx = view.w / 2 - ((b[0] + b[2]) / 2) * k;
+    view.ty = view.h / 2 - ((b[1] + b[3]) / 2) * k;
+  }
+  refreshUi();
+}
+
+function renderParts() {
+  const body = $('partsBody');
+  const doc = state.doc;
+  body.textContent = '';
+  if (!doc || !doc.parts || (!isBoard(doc) && !isSheet(doc))) return;
+  const parts = doc.parts();
+  body.append(el('h2', null, '부품 목록 (' + parts.length + ')'));
+  body.append(el('p', { class: 'empty' }, '탭하면 그 부품으로 이동합니다. 종류는 참조 번호(R, C, U…)로 추정한 것입니다.'));
+  for (const p of parts) {
+    body.append(el('button', { class: 'part' + (state.sel[0] === p.item ? ' on' : ''), onclick() { selectAndShow(p.item); } },
+      el('b', null, p.ref), el('span', null, p.value || '–'), el('em', null, p.kind)));
   }
 }
 
@@ -1122,6 +1176,7 @@ function refreshUi() {
   renderProps();
   renderLayers();
   renderCheck();
+  renderParts();
   requestDraw();
 }
 

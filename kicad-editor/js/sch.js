@@ -1,5 +1,6 @@
 // .kicad_sch / .kicad_sym document: extraction, rendering, hit-testing, edits.
 import { parse, child, children, str, num, hasAtom, isHidden, ptsOf, setNum, setStr, setRaw, remove, insert, quote, uuid, fmt } from './sexpr.js';
+import { partKind, pinType, refCompare } from './parts.js';
 import { DEG, arcFrom3, bezierPts, primDist, primBounds, emptyBounds, drawPrims, measure } from './draw.js';
 
 const C = {
@@ -679,6 +680,18 @@ export class SchDoc {
         f.push({ label, type: 'text', value: str(p, 2) || '', set(v) { setStr(p, 2, v); if (key === 'Reference') self.setReference(n, v); self.refresh(item); } });
       }
       f.push(...pos);
+      const kind = partKind(item.ref, item.libId + ' ' + item.value);
+      if (kind) f.splice(0, 0, { label: '부품 종류', type: 'info', value: kind });
+      const libNode = this.libNodes.get(str(child(n, 'lib_name')) || '') || this.libNodes.get(item.libId);
+      let descr = '';
+      for (const src of [n, libNode]) {
+        if (descr || !src) continue;
+        for (const p of children(src, 'property')) if ((str(p, 1) === 'Description' || str(p, 1) === 'ki_description') && str(p, 2)) descr = str(p, 2);
+      }
+      if (descr) f.push({ label: '설명', type: 'info', value: descr });
+      const pins = item.pins.filter((p) => p.number);
+      if (pins.length) f.push({ label: '핀', type: 'table', head: ['핀', '이름', '종류'],
+        rows: pins.map((p) => [p.number, p.name && p.name !== '~' ? p.name : '–', pinType(p.type)]).sort((a, b) => refCompare(a[0], b[0])) });
       f.push({ label: '각도 (°)', type: 'info', value: String(item.ang) + (item.mirror ? ' · 반전 ' + item.mirror : '') });
       f.push({ label: '심볼', type: 'info', value: item.libId + (item.unit > 1 ? ' (유닛 ' + item.unit + ')' : '') });
       return f;
@@ -715,6 +728,12 @@ export class SchDoc {
     }
     if (item.k === 'libsym') return [{ label: '심볼', type: 'info', value: item.name }];
     return pos;
+  }
+
+  parts() {
+    return this.items.filter((it) => it.k === 'symbol' && it.ref && it.ref[0] !== '#')
+      .map((it) => ({ item: it, ref: it.ref + (it.unit > 1 ? ' (유닛 ' + it.unit + ')' : ''), value: it.value, kind: partKind(it.ref, it.libId + ' ' + it.value) }))
+      .sort((a, b) => refCompare(a.ref, b.ref));
   }
 
   summary() {
