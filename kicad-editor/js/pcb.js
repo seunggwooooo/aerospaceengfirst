@@ -1,6 +1,7 @@
 // .kicad_pcb / .kicad_mod document: extraction, rendering, hit-testing, edits.
 import { parse, serialize, child, children, str, num, hasAtom, isHidden, ptsOf, setNum, setStr, setRaw, remove, insert, quote, uuid, fmt } from './sexpr.js';
-import { DEG, arcFrom3, bezierPts, primDist, primBounds, emptyBounds, drawPrims, shapePointDist, shapeCenter } from './draw.js';
+import { DEG, arcFrom3, bezierPts, primDist, primBounds, emptyBounds, drawPrims, drawText, shapePointDist, shapeCenter } from './draw.js';
+import { partKind, pinType, refCompare } from './parts.js';
 
 const COLORS = {
   'F.Cu': '#c83434', 'B.Cu': '#4d7fc4', 'In1.Cu': '#7fc87f', 'In2.Cu': '#ce7d2c',
@@ -152,6 +153,8 @@ export class PcbDoc {
     this.grid = 0.1;
     this.digits = 6;
     this.showZoneFill = true;
+    this.showPadLabels = true;
+    this.showValues = true;
     this.hlNet = null;
     this.netNames = new Map();
     this.items = [];
@@ -236,7 +239,7 @@ export class PcbDoc {
       this.padPrims(c, ident, tmp);
       if (!tmp.prims.length) return null;
       const at = child(c, 'at');
-      return { k: 'pad', n: c, x: num(at, 1), y: num(at, 2), number: str(c, 1) || '', layer: '@pad', net: null, prims: tmp.prims, cu: tmp.cu, holes: tmp.holes };
+      return { k: 'pad', n: c, x: num(at, 1), y: num(at, 2), number: str(c, 1) || '', layer: '@pad', net: null, prims: tmp.prims, cu: tmp.cu, holes: tmp.holes, padList: tmp.padList };
     }
     if (c.h === 'fp_text' || c.h === 'property') {
       if (isHidden(c)) return null;
@@ -423,6 +426,9 @@ export class PcbDoc {
       }
     };
     it.pads++;
+    const fn = str(child(c, 'pinfunction')) || '';
+    (it.padList || (it.padList = [])).push({ number, x: cx, y: cy, w, h: shape === 'circle' ? w : h, ang: pang, net, fn,
+      type: str(child(c, 'pintype')) || '', th: type === 'thru_hole', npth: type === 'np_thru_hole', layers });
     const cuLayers = type === 'thru_hole' ? '*' : new Set([...layers].filter((l) => l.endsWith('.Cu')));
     if (type !== 'np_thru_hole' && (cuLayers === '*' || cuLayers.size)) {
       const hw = w / 2, hh = (shape === 'circle' ? w : h) / 2;
@@ -437,7 +443,7 @@ export class PcbDoc {
         pts = [...PT(ox - ix, oy - iy), ...PT(ox + ix, oy - iy), ...PT(ox + ix, oy + iy), ...PT(ox - ix, oy + iy)];
         r = rr;
       }
-      it.cu.push({ layers: cuLayers, pts, r, net, pad: number });
+      it.cu.push({ layers: cuLayers, pts, r, net, pad: number, fn });
     }
     if (dw > 0) it.holes.push({ x: px, y: py, d: Math.min(dw, dh) });
     if (type === 'thru_hole') {
@@ -519,7 +525,7 @@ export class PcbDoc {
 
     for (const it of sel) {
       ctx.globalAlpha = 0.9;
-      drawPrims(ctx, view, it.prims, '#ffffff', { force: true, filter: (p) => !p.zf && !p.hole });
+      drawPrims(ctx, view, it.prims, '#ffffff', { force: true, filter: (p) => !p.zf && !p.hole && !(it.k === 'fp' && p.pad !== undefined) });
       ctx.globalAlpha = 1;
       if (it.k === 'fp') {
         ctx.strokeStyle = '#ffd24d';
@@ -527,6 +533,46 @@ export class PcbDoc {
         ctx.setLineDash([4 / view.k, 3 / view.k]);
         ctx.strokeRect(it.bb[0], it.bb[1], it.bb[2] - it.bb[0], it.bb[3] - it.bb[1]);
         ctx.setLineDash([]);
+      }
+    }
+    this.drawLabels(ctx, view);
+  }
+
+  // Pad numbers + net names on the pads and each part's value next to it, so
+  // it is clear what is being connected to what.
+  drawLabels(ctx, view) {
+    if (!this.showPadLabels && !this.showValues) return;
+    const k = view.k;
+    const x0 = -view.tx / k, y0 = -view.ty / k, x1 = x0 + view.w / k, y1 = y0 + view.h / k;
+    for (const it of this.items) {
+      if (it.k !== 'fp' && it.k !== 'pad') continue;
+      const bb = it.bb;
+      if (bb && (bb[2] < x0 || bb[0] > x1 || bb[3] < y0 - 2 || bb[1] > y1)) continue;
+      if (this.showPadLabels && it.padList) {
+        for (const pd of it.padList) {
+          if (pd.npth || !pd.number) continue;
+          if (pd.x < x0 || pd.x > x1 || pd.y < y0 || pd.y > y1) continue;
+          const side = Math.abs(Math.round(pd.ang / 90)) % 2 === 1;
+          const pw = side ? pd.h : pd.w, ph = side ? pd.w : pd.h;
+          if (Math.min(pw, ph) * k < 13) continue;
+          let shown = pd.th ? this.layerVisible('@TH') : false;
+          if (!pd.th) for (const l of pd.layers) if (l.endsWith('.Cu') && this.layerVisible(l)) { shown = true; break; }
+          if (!shown) continue;
+          const net = pd.net ? pd.net.split('/').pop() : '';
+          const two = net && ph * k > 24;
+          const numPx = Math.min(ph * (two ? 0.34 : 0.5), pw * 0.85 / (Math.max(pd.number.length, 1) * 0.6));
+          drawText(ctx, view, { t: 'T', x: pd.x, y: pd.y - (two ? ph * 0.2 : 0), ang: 0, text: pd.number, h: numPx / 1.38, hj: 'c', vj: 'c', bold: true }, '#ffffff');
+          if (two) {
+            const netPx = Math.min(ph * 0.26, pw * 0.92 / (net.length * 0.56));
+            if (netPx * k >= 6) drawText(ctx, view, { t: 'T', x: pd.x, y: pd.y + ph * 0.22, ang: 0, text: net, h: netPx / 1.38, hj: 'c', vj: 'c' }, '#eaf2ff');
+          }
+        }
+      }
+      if (this.showValues && it.k === 'fp' && it.value && bb) {
+        const bw = bb[2] - bb[0];
+        const text = it.value.length > 18 ? it.value.slice(0, 17) + '…' : it.value;
+        const px = Math.min(1.0, bw * 0.86 / (text.length * 0.56), (bb[3] - bb[1]) * 0.36);
+        if (px * k >= 8) drawText(ctx, view, { t: 'T', x: (bb[0] + bb[2]) / 2, y: (bb[1] + bb[3]) / 2, ang: 0, text, h: px / 1.38, hj: 'c', vj: 'c' }, '#8fe3ff');
       }
     }
   }
@@ -691,7 +737,7 @@ export class PcbDoc {
       if (it.k === 'fp' || it.k === 'pad') {
         for (const s of it.cu) {
           if (s.layers !== '*' && !s.layers.has(layer)) continue;
-          if (shapePointDist(s, x, y) <= 0) { const c = shapeCenter(s); return { x: c[0], y: c[1], net: s.net, pad: true }; }
+          if (shapePointDist(s, x, y) <= 0) { const c = shapeCenter(s); return { x: c[0], y: c[1], net: s.net, pad: true, name: (it.ref ? it.ref + ' ' : '') + '패드 ' + s.pad + (s.fn ? ' (' + s.fn + ')' : '') }; }
         }
       } else if (it.k === 'via') near(it.x, it.y, it.net);
       else if (it.k === 'seg' && it.layer === layer) { near(it.x1, it.y1, it.net); near(it.x2, it.y2, it.net); }
@@ -781,6 +827,17 @@ export class PcbDoc {
       fields.push({ label: '값 (Value)', type: 'text', value: item.value, set: (v) => setField('Value', v) });
       fields.push(...xy(child(n, 'at'), '위치'));
       fields.push({ label: '각도 (°)', type: 'number', value: item.ang, set(v) { self.setFpAngle(item, v); } });
+      const kind = partKind(item.ref, item.name + ' ' + item.value);
+      if (kind) fields.splice(0, 0, { label: '부품 종류', type: 'info', value: kind });
+      let descr = '';
+      for (const c of n.items) if (c.h === 'property' && str(c, 1) === 'Description') descr = str(c, 2) || '';
+      if (!descr) descr = str(child(n, 'descr')) || '';
+      if (descr) fields.push({ label: '설명', type: 'info', value: descr });
+      for (const c of n.items) if (c.h === 'property' && str(c, 1) === 'Datasheet' && /^https?:/.test(str(c, 2) || '')) fields.push({ label: '데이터시트', type: 'link', value: str(c, 2) });
+      if (item.padList && item.padList.some((p) => !p.npth)) {
+        fields.push({ label: '핀 연결', type: 'table', head: ['핀', '기능', '네트'],
+          rows: item.padList.filter((p) => !p.npth && p.number).map((p) => [p.number, p.fn || pinType(p.type) || '–', (p.net || '연결 없음').replace(/\{slash\}/g, '/')]) });
+      }
       fields.push({ label: '면', type: 'info', value: item.layer });
       fields.push({ label: '패드 수', type: 'info', value: String(item.pads) });
       fields.push({ label: '풋프린트', type: 'info', value: item.name });
@@ -854,6 +911,13 @@ export class PcbDoc {
       return [{ label: '레이어', type: 'select', options: this.layerNames, value: item.layer, set(v) { setRaw(ln, 1, quote(v)); self.refresh(item); } }];
     }
     return [];
+  }
+
+  // Parts list for the panel.
+  parts() {
+    return this.items.filter((it) => it.k === 'fp' && it.ref)
+      .map((it) => ({ item: it, ref: it.ref, value: it.value, kind: partKind(it.ref, it.name + ' ' + it.value) }))
+      .sort((a, b) => refCompare(a.ref, b.ref));
   }
 
   refreshAll() {
