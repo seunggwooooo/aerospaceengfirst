@@ -103,7 +103,88 @@ button, select, input, textarea { font: inherit; color: inherit; }
 
 body:not(.has-doc) .needs-doc { display: none; }
 body:not(.is-sch) .sch-only { display: none; }
-body:not(.is-pcb) #layersTab { display: none; }
+body:not(.is-pcb) .pcb-only { display: none; }
+body:not(.is-fp) .fp-only { display: none; }
+body:not(.is-pcb):not(.is-fp) .layer-ctl { display: none; }
+body:not(.is-pcb):not(.is-sch) .check-only { display: none; }
+body:not(.is-pcb):not(.is-fp) #layersTab { display: none; }
+
+.bar input {
+  width: 58px;
+  min-height: 34px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #1c2330;
+  font-size: 15px;
+}
+
+/* ---------- document tabs ---------- */
+
+.doctabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px calc(10px + env(safe-area-inset-right)) 0 calc(10px + env(safe-area-inset-left));
+  background: #151b26;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.doctabs:empty { display: none; }
+.doctabs::-webkit-scrollbar { display: none; }
+.doctab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  max-width: 260px;
+  padding-left: 12px;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+.doctab.on { background: var(--bar-2); color: var(--ink); }
+.doctab button { border: 0; background: transparent; cursor: pointer; min-height: 34px; }
+.doctab .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; text-align: left; }
+.doctab .kind { font-size: 10.5px; padding: 1px 5px; border-radius: 4px; background: #33405a; color: #cfd8ea; flex: none; }
+.doctab .x { padding: 0 10px 0 6px; font-size: 17px; color: var(--muted); }
+.doctab .dirty { color: #ffb454; }
+
+/* ---------- 3D view ---------- */
+
+.view3d { position: absolute; inset: 0; z-index: 4; background: #1a2130; }
+.view3d[hidden] { display: none; }
+.v3-bar {
+  position: absolute;
+  top: 10px;
+  right: calc(10px + env(safe-area-inset-right));
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius);
+  background: rgba(28, 35, 48, 0.9);
+  z-index: 1;
+}
+.v3-bar button { min-height: 38px; padding: 0 13px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
+.v3-bar button.on { background: #3a4558; }
+.v3-bar button.primary { background: var(--accent); color: #fff; font-weight: 600; }
+.v3-note {
+  position: absolute;
+  left: 50%;
+  bottom: calc(10px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(15, 20, 28, 0.78);
+  color: #d5dbe6;
+  font-size: 12px;
+  text-align: center;
+  pointer-events: none;
+}
 
 /* ---------- stage ---------- */
 
@@ -292,6 +373,30 @@ code { padding: 1px 5px; border-radius: 4px; background: var(--bar-2); font-size
 .layer.off i { background: transparent !important; }
 .layer-tools { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 10px; }
 .layer-tools .panel-btn { margin: 0; font-size: 13px; }
+
+.rules { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; }
+.check-sum { margin: 4px 0 10px; padding: 9px 10px; border-radius: 6px; font-size: 13.5px; line-height: 1.5; background: #e6f4ea; color: #14532d; }
+.check-sum.bad { background: #fde8e8; color: #8a1c1c; }
+.check-sum.warn { background: #fff4d6; color: #6b4e00; }
+.viol {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-bottom: 1px solid var(--panel-line);
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+  line-height: 1.45;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.viol:hover, .viol.on { background: #e9edf3; }
+.viol i { width: 9px; height: 9px; margin-top: 5px; border-radius: 50%; background: #e5484d; flex: none; }
+.viol.warn i { background: #e0a100; }
+.drc-ok { margin-top: 10px; padding: 8px 10px; border-radius: 6px; background: #e6f4ea; color: #14532d; font-size: 13px; line-height: 1.5; }
+.drc-bad { margin-top: 10px; padding: 8px 10px; border-radius: 6px; background: #fde8e8; color: #8a1c1c; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 
 /* ---------- dialog / toast ---------- */
 
