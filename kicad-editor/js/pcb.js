@@ -1,6 +1,6 @@
 // .kicad_pcb / .kicad_mod document: extraction, rendering, hit-testing, edits.
-import { child, children, str, num, hasAtom, isHidden, ptsOf, setNum, setStr, setRaw, remove, quote } from './sexpr.js';
-import { DEG, arcFrom3, bezierPts, primDist, primBounds, emptyBounds, drawPrims } from './draw.js';
+import { parse, serialize, child, children, str, num, hasAtom, isHidden, ptsOf, setNum, setStr, setRaw, remove, insert, quote, uuid, fmt } from './sexpr.js';
+import { DEG, arcFrom3, bezierPts, primDist, primBounds, emptyBounds, drawPrims, shapePointDist, shapeCenter } from './draw.js';
 
 const COLORS = {
   'F.Cu': '#c83434', 'B.Cu': '#4d7fc4', 'In1.Cu': '#7fc87f', 'In2.Cu': '#ce7d2c',
@@ -171,8 +171,16 @@ export class PcbDoc {
     })).sort((a, b) => zRank(b.name) - zRank(a.name));
     this.copper = names.filter((n) => n.endsWith('.Cu'));
 
+    this.version = num(child(root, 'version'), 1, 20221018);
+    this.thickness = num(child(child(root, 'general'), 'thickness'), 1, 1.6);
     if (this.isFootprintFile) {
-      this.items.push(this.build(root));
+      this.fpName = str(root, 1) || '';
+      const vars = this.fpVars();
+      for (const c of root.items) {
+        if (c.t !== 'l') continue;
+        const it = this.buildFpChild(c, vars);
+        if (it) this.items.push(it);
+      }
     } else {
       for (const c of root.items) {
         if (c.t !== 'l') continue;
@@ -181,6 +189,66 @@ export class PcbDoc {
         if (it) this.items.push(it);
       }
     }
+    this.detectStyle();
+  }
+
+  // How this file writes ids and nets, so added items match its KiCad version.
+  detectStyle() {
+    this.idKey = this.version >= 20231014 ? 'uuid' : 'tstamp';
+    this.idQuoted = this.idKey === 'uuid';
+    const probe = (n) => {
+      const u = child(n, 'uuid');
+      if (u && u.items[1]) { this.idKey = 'uuid'; this.idQuoted = u.items[1].q; return true; }
+      if (child(n, 'tstamp')) { this.idKey = 'tstamp'; this.idQuoted = false; return true; }
+      return false;
+    };
+    for (const it of this.items) if (probe(it.n)) break;
+    this.netCodes = new Map([...this.netNames].map(([code, name]) => [name, code]));
+    this.netsByName = this.netNames.size === 0;
+    this.useStroke = this.version >= 20220000;
+  }
+
+  idNode() { const u = uuid(); return `(${this.idKey} ${this.idQuoted ? '"' + u + '"' : u})`; }
+
+  netNode(net) {
+    if (this.netsByName) return net ? ` (net ${quote(net)})` : '';
+    return ` (net ${net && this.netCodes.has(net) ? this.netCodes.get(net) : 0})`;
+  }
+
+  fpVars() {
+    const v = { REFERENCE: '', VALUE: '' };
+    for (const c of this.root.items) {
+      if (c.h === 'property') {
+        if (str(c, 1) === 'Reference') v.REFERENCE = str(c, 2) || '';
+        else if (str(c, 1) === 'Value') v.VALUE = str(c, 2) || '';
+      } else if (c.h === 'fp_text') {
+        if (str(c, 1) === 'reference') v.REFERENCE = str(c, 2) || '';
+        else if (str(c, 1) === 'value') v.VALUE = str(c, 2) || '';
+      }
+    }
+    return v;
+  }
+
+  // Footprint editor: every pad / graphic / text of the footprint is its own item.
+  buildFpChild(c, vars) {
+    if (c.h === 'pad') {
+      const tmp = { prims: [], cu: [], holes: [], pads: 0 };
+      this.padPrims(c, ident, tmp);
+      if (!tmp.prims.length) return null;
+      const at = child(c, 'at');
+      return { k: 'pad', n: c, x: num(at, 1), y: num(at, 2), number: str(c, 1) || '', layer: '@pad', net: null, prims: tmp.prims, cu: tmp.cu, holes: tmp.holes };
+    }
+    if (c.h === 'fp_text' || c.h === 'property') {
+      if (isHidden(c)) return null;
+      const p = textPrim(c, 2, ident, vars);
+      return p ? { k: 'text', n: c, layer: p.layer, ti: 2, prims: [p] } : null;
+    }
+    if (c.h.startsWith('fp_')) {
+      const prims = [];
+      graphicPrims(c, ident, prims);
+      return prims.length ? { k: 'gr', n: c, layer: prims[0].layer, prims } : null;
+    }
+    return null;
   }
 
   // ---------- extraction ----------
@@ -194,6 +262,7 @@ export class PcbDoc {
         const it = { k: 'seg', n, layer: str(child(n, 'layer')), net: netOf(n, this.netNames), w: num(child(n, 'width'), 1, 0.2),
           x1: num(s, 1), y1: num(s, 2), x2: num(e, 1), y2: num(e, 2) };
         it.prims = [{ t: 'L', layer: it.layer, x1: it.x1, y1: it.y1, x2: it.x2, y2: it.y2, w: it.w, net: it.net }];
+        it.cu = [{ layers: new Set([it.layer]), pts: [it.x1, it.y1, it.x2, it.y2], r: it.w / 2, net: it.net }];
         return it;
       }
       case 'arc': {
@@ -204,6 +273,22 @@ export class PcbDoc {
         it.prims = a
           ? [{ t: 'A', layer: it.layer, ...a, w: it.w, net: it.net }]
           : [{ t: 'L', layer: it.layer, x1: num(s, 1), y1: num(s, 2), x2: num(e, 1), y2: num(e, 2), w: it.w, net: it.net }];
+        it.cu = [];
+        const ls = new Set([it.layer]);
+        if (a) {
+          const tau = Math.PI * 2;
+          let span = a.ccw ? a.a0 - a.a1 : a.a1 - a.a0;
+          span = ((span % tau) + tau) % tau;
+          const steps = Math.max(2, Math.ceil(span / 0.35));
+          let px = num(s, 1), py = num(s, 2);
+          for (let i = 1; i <= steps; i++) {
+            const ang = a.a0 + (a.ccw ? -1 : 1) * span * i / steps;
+            const qx = a.cx + a.r * Math.cos(ang), qy = a.cy + a.r * Math.sin(ang);
+            it.cu.push({ layers: ls, pts: [px, py, qx, qy], r: it.w / 2, net: it.net });
+            px = qx; py = qy;
+          }
+        } else it.cu.push({ layers: ls, pts: [num(s, 1), num(s, 2), num(e, 1), num(e, 2)], r: it.w / 2, net: it.net });
+        it.ends = [[num(s, 1), num(s, 2)], [num(e, 1), num(e, 2)]];
         return it;
       }
       case 'via': {
@@ -216,6 +301,13 @@ export class PcbDoc {
           { t: 'C', layer: '@Via', cx: it.x, cy: it.y, r: it.size / 2, w: 0, fill: true, net: it.net },
           { t: 'C', layer: '@Holes', cx: it.x, cy: it.y, r: it.drill / 2, w: 0, fill: true },
         ];
+        let span = '*';
+        const i0 = this.copper.indexOf(it.layers[0]), i1 = this.copper.indexOf(it.layers[1]);
+        if (i0 >= 0 && i1 >= 0 && !(Math.min(i0, i1) === 0 && Math.max(i0, i1) === this.copper.length - 1)) {
+          span = new Set(this.copper.slice(Math.min(i0, i1), Math.max(i0, i1) + 1));
+        }
+        it.cu = [{ layers: span, pts: [it.x, it.y], r: it.size / 2, net: it.net }];
+        it.holes = [{ x: it.x, y: it.y, d: it.drill }];
         return it;
       }
       case 'zone': {
@@ -256,7 +348,7 @@ export class PcbDoc {
     const cs = Math.cos(ang * DEG), sn = Math.sin(ang * DEG);
     const T = (lx, ly) => [x + lx * cs + ly * sn, y - lx * sn + ly * cs];
     const it = { k: 'fp', n, x, y, ang, layer: str(child(n, 'layer')) || 'F.Cu', name: str(n, 1) || '', ref: '', value: '',
-      prims: [], pads: 0, fixed: this.isFootprintFile };
+      prims: [], cu: [], holes: [], pads: 0 };
     // reference / value first, they feed ${REFERENCE} substitution
     for (const c of n.items) {
       if (c.h === 'property') {
@@ -331,6 +423,23 @@ export class PcbDoc {
       }
     };
     it.pads++;
+    const cuLayers = type === 'thru_hole' ? '*' : new Set([...layers].filter((l) => l.endsWith('.Cu')));
+    if (type !== 'np_thru_hole' && (cuLayers === '*' || cuLayers.size)) {
+      const hw = w / 2, hh = (shape === 'circle' ? w : h) / 2;
+      let pts, r;
+      if (shape === 'circle') { pts = [cx, cy]; r = hw; }
+      else if (shape === 'oval') {
+        r = Math.min(hw, hh);
+        const l = Math.max(hw, hh) - r;
+        pts = hw >= hh ? [...PT(ox - l, oy), ...PT(ox + l, oy)] : [...PT(ox, oy - l), ...PT(ox, oy + l)];
+      } else {
+        const ix = Math.max(hw - rr, 0), iy = Math.max(hh - rr, 0);
+        pts = [...PT(ox - ix, oy - iy), ...PT(ox + ix, oy - iy), ...PT(ox + ix, oy + iy), ...PT(ox - ix, oy + iy)];
+        r = rr;
+      }
+      it.cu.push({ layers: cuLayers, pts, r, net, pad: number });
+    }
+    if (dw > 0) it.holes.push({ x: px, y: py, d: Math.min(dw, dh) });
     if (type === 'thru_hole') {
       mk('@TH');
       for (const l of layers) if (!l.endsWith('.Cu')) mk(l);
@@ -343,9 +452,10 @@ export class PcbDoc {
   }
 
   refresh(item) {
-    const fresh = this.build(item.n);
+    const fresh = this.isFootprintFile ? this.buildFpChild(item.n, this.fpVars()) : this.build(item.n);
     if (fresh) Object.assign(item, fresh);
     this._buckets = null;
+    this.rev = (this.rev || 0) + 1;
   }
 
   // ---------- rendering ----------
@@ -364,7 +474,7 @@ export class PcbDoc {
   }
 
   layerVisible(name) {
-    if (name === '@Holes') return true;
+    if (name === '@Holes' || name === '@pad') return true;
     if (name === '@TH' || name === '@Via') return this.layers.some((l) => l.visible && l.name.endsWith('.Cu'));
     const l = this.layers.find((x) => x.name === name);
     return l ? l.visible : false;
@@ -436,6 +546,10 @@ export class PcbDoc {
         else if (x >= it.bb[0] - tol && x <= it.bb[2] + tol && y >= it.bb[1] - tol && y <= it.bb[3] + tol) weak.push(it);
         continue;
       }
+      if (it.k === 'pad') {
+        for (const p of it.prims) if (primDist(x, y, p) <= tol * 0.3) { strong.push(it); break; }
+        continue;
+      }
       if (it.k === 'via') { if (this.layerVisible('@Via') && primDist(x, y, it.prims[0]) <= tol * 0.5) vias.push(it); continue; }
       if (!this.layerVisible(it.layer)) continue;
       let d = Infinity;
@@ -459,8 +573,8 @@ export class PcbDoc {
 
   // ---------- edits ----------
 
-  canMove(item) { return !item.fixed; }
-  canRotate(item) { return (item.k === 'fp' && !item.fixed) || item.k === 'text'; }
+  canMove() { return true; }
+  canRotate(item) { return item.k === 'fp' || item.k === 'text' || item.k === 'pad'; }
 
   shiftNode(n, dx, dy) {
     for (const c of n.items) {
@@ -484,7 +598,7 @@ export class PcbDoc {
   }
 
   rotate(item) {
-    if (item.k === 'text') {
+    if (item.k === 'text' || item.k === 'pad') {
       const at = child(item.n, 'at');
       setNum(at, 3, normAng(num(at, 3) + 90), 4);
     } else if (item.k === 'fp') {
@@ -515,6 +629,111 @@ export class PcbDoc {
     const i = this.items.indexOf(item);
     if (i >= 0) this.items.splice(i, 1);
     this._buckets = null;
+    this.rev = (this.rev || 0) + 1;
+  }
+
+  // ---------- adding (routing, vias, footprint parts) ----------
+
+  add(text, vars) {
+    const node = parse(text);
+    insert(this.root, node, this.isFootprintFile ? ['model', 'embedded_fonts'] : ['zone', 'group', 'embedded_fonts', 'embedded_files']);
+    const it = this.isFootprintFile ? this.buildFpChild(node, this.fpVars()) : this.build(node);
+    if (it) this.items.push(it);
+    this._buckets = null;
+    this.rev = (this.rev || 0) + 1;
+    return it;
+  }
+
+  f(v) { return fmt(v, this.digits); }
+
+  addTrack(x1, y1, x2, y2, w, layer, net) {
+    if (Math.hypot(x2 - x1, y2 - y1) < 1e-6) return null;
+    return this.add(`(segment (start ${this.f(x1)} ${this.f(y1)}) (end ${this.f(x2)} ${this.f(y2)}) (width ${this.f(w)}) (layer ${quote(layer)})${this.netNode(net)} ${this.idNode()})`);
+  }
+
+  addVia(x, y, size, drill, net) {
+    const a = this.copper[0] || 'F.Cu', b = this.copper[this.copper.length - 1] || 'B.Cu';
+    return this.add(`(via (at ${this.f(x)} ${this.f(y)}) (size ${this.f(size)}) (drill ${this.f(drill)}) (layers ${quote(a)} ${quote(b)})${this.netNode(net)} ${this.idNode()})`);
+  }
+
+  addPad(x, y) {
+    const pads = this.items.filter((it) => it.k === 'pad');
+    const last = pads[pads.length - 1];
+    let n = 1;
+    for (const p of pads) { const v = parseInt(p.number, 10); if (v >= n) n = v + 1; }
+    let text;
+    if (last) {
+      const copy = parse(serialize(last.n));
+      setStr(copy, 1, String(n));
+      const at = child(copy, 'at');
+      setNum(at, 1, x, this.digits);
+      setNum(at, 2, y, this.digits);
+      for (const key of ['uuid', 'tstamp']) { const u = child(copy, key); if (u) remove(u); }
+      text = serialize(copy).trim().replace(/\)$/, ' ' + this.idNode() + ')');
+    } else {
+      text = `(pad "${n}" smd roundrect (at ${this.f(x)} ${this.f(y)}) (size 1 1.5) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25) ${this.idNode()})`;
+    }
+    return this.add(text);
+  }
+
+  addFpLine(x1, y1, x2, y2, layer) {
+    if (Math.hypot(x2 - x1, y2 - y1) < 1e-6) return null;
+    const w = /CrtYd/.test(layer) ? 0.05 : /Fab/.test(layer) ? 0.1 : 0.12;
+    const stroke = this.useStroke ? `(stroke (width ${w}) (type solid)) (layer ${quote(layer)})` : `(layer ${quote(layer)}) (width ${w})`;
+    return this.add(`(fp_line (start ${this.f(x1)} ${this.f(y1)}) (end ${this.f(x2)} ${this.f(y2)}) ${stroke} ${this.idNode()})`);
+  }
+
+  // Nearest thing a track can start or end on: a pad, a via, or a track end.
+  anchorAt(x, y, tol, layer) {
+    let best = null, bd = tol;
+    const near = (ax, ay, net) => { const d = Math.hypot(ax - x, ay - y); if (d <= bd) { bd = d; best = { x: ax, y: ay, net }; } };
+    for (const it of this.items) {
+      if (it.k === 'fp' || it.k === 'pad') {
+        for (const s of it.cu) {
+          if (s.layers !== '*' && !s.layers.has(layer)) continue;
+          if (shapePointDist(s, x, y) <= 0) { const c = shapeCenter(s); return { x: c[0], y: c[1], net: s.net, pad: true }; }
+        }
+      } else if (it.k === 'via') near(it.x, it.y, it.net);
+      else if (it.k === 'seg' && it.layer === layer) { near(it.x1, it.y1, it.net); near(it.x2, it.y2, it.net); }
+      else if (it.k === 'arc' && it.layer === layer && it.ends) for (const e of it.ends) near(e[0], e[1], it.net);
+    }
+    return best;
+  }
+
+  netAt(x, y, layer) {
+    for (const it of this.items) {
+      if (!it.cu) continue;
+      for (const s of it.cu) {
+        if (s.net && (s.layers === '*' || s.layers.has(layer)) && shapePointDist(s, x, y) <= 0) return s.net;
+      }
+    }
+    return null;
+  }
+
+  defaults() {
+    const count = (arr) => { const m = new Map(); let best = null, bn = 0; for (const v of arr) { const n = (m.get(v) || 0) + 1; m.set(v, n); if (n > bn) { bn = n; best = v; } } return best; };
+    const vias = this.items.filter((it) => it.k === 'via');
+    return {
+      width: count(this.items.filter((it) => it.k === 'seg').map((it) => it.w)) || 0.25,
+      viaSize: count(vias.map((v) => v.size)) || 0.8,
+      viaDrill: count(vias.map((v) => v.drill)) || 0.4,
+    };
+  }
+
+  setPadType(item, type) {
+    const n = item.n;
+    setRaw(n, 2, type);
+    const old = child(n, 'layers');
+    const drill = child(n, 'drill');
+    const smd = type === 'smd';
+    if (old) remove(old);
+    insert(n, parse(smd ? '(layers "F.Cu" "F.Paste" "F.Mask")' : '(layers "*.Cu" "*.Mask")'), ['roundrect_rratio', 'net', 'pintype', 'uuid', 'tstamp']);
+    if (smd && drill) remove(drill);
+    if (!smd && !drill) {
+      const size = child(n, 'size');
+      insert(n, parse(`(drill ${this.f(Math.max(0.3, Math.min(num(size, 1), num(size, 2, num(size, 1))) * 0.55))})`), ['layers']);
+    }
+    this.refresh(item);
   }
 
   handles(item) {
@@ -532,6 +751,7 @@ export class PcbDoc {
   title(item) {
     switch (item.k) {
       case 'fp': return '풋프린트 ' + (item.ref || '');
+      case 'pad': return '패드 ' + item.number;
       case 'seg': return '배선 (트랙)';
       case 'arc': return '원호 배선';
       case 'via': return '비아';
@@ -559,14 +779,37 @@ export class PcbDoc {
       };
       fields.push({ label: '참조 (Reference)', type: 'text', value: item.ref, set: (v) => setField('Reference', v) });
       fields.push({ label: '값 (Value)', type: 'text', value: item.value, set: (v) => setField('Value', v) });
-      if (!item.fixed) {
-        fields.push(...xy(child(n, 'at'), '위치'));
-        fields.push({ label: '각도 (°)', type: 'number', value: item.ang, set(v) { self.setFpAngle(item, v); } });
-      }
+      fields.push(...xy(child(n, 'at'), '위치'));
+      fields.push({ label: '각도 (°)', type: 'number', value: item.ang, set(v) { self.setFpAngle(item, v); } });
       fields.push({ label: '면', type: 'info', value: item.layer });
       fields.push({ label: '패드 수', type: 'info', value: String(item.pads) });
       fields.push({ label: '풋프린트', type: 'info', value: item.name });
       return fields;
+    }
+    if (item.k === 'pad') {
+      const at = child(n, 'at'), size = child(n, 'size'), drill = child(n, 'drill');
+      const type = str(n, 2), shape = str(n, 3);
+      const f = [
+        { label: '번호', type: 'text', value: item.number, set(v) { setStr(n, 1, v); self.refresh(item); } },
+        { label: '종류', type: 'select', options: ['smd', 'thru_hole', 'np_thru_hole'], value: type, set(v) { self.setPadType(item, v); } },
+        { label: '모양', type: 'select', options: [...new Set(['circle', 'rect', 'oval', 'roundrect', shape])], value: shape,
+          set(v) {
+            setRaw(n, 3, v);
+            if (v === 'roundrect' && !child(n, 'roundrect_rratio')) insert(n, parse('(roundrect_rratio 0.25)'), ['net', 'pintype', 'uuid', 'tstamp']);
+            self.refresh(item);
+          } },
+        ...xy(at, '위치'),
+        { label: '각도 (°)', type: 'number', value: num(at, 3), set(v) { setNum(at, 3, normAng(v), 4); self.refresh(item); } },
+        { label: '크기 X', type: 'number', value: num(size, 1), set(v) { if (v > 0) { setNum(size, 1, v, self.digits); self.refresh(item); } } },
+        { label: '크기 Y', type: 'number', value: num(size, 2, num(size, 1)), set(v) { if (v > 0) { setNum(size, 2, v, self.digits); self.refresh(item); } } },
+      ];
+      if (drill) {
+        const di = drill.items.findIndex((a, i) => i > 0 && a.t === 'a' && a.raw !== 'oval');
+        if (di > 0) f.push({ label: '드릴 (mm)', type: 'number', value: num(drill, di), set(v) { if (v > 0) { setNum(drill, di, v, self.digits); self.refresh(item); } } });
+      }
+      const ls = child(n, 'layers');
+      if (ls) f.push({ label: '레이어', type: 'info', value: ls.items.slice(1).map((a) => a.raw.replace(/"/g, '')).join(', ') });
+      return f;
     }
     if (item.k === 'seg') {
       const wn = child(n, 'width'), ln = child(n, 'layer');
@@ -598,7 +841,7 @@ export class PcbDoc {
       const at = child(n, 'at'), ln = child(n, 'layer');
       const size = child(child(child(n, 'effects'), 'font'), 'size');
       const f = [
-        { label: '내용', type: 'textarea', value: str(n, 1) || '', set(v) { setStr(n, 1, v); self.refresh(item); } },
+        { label: '내용', type: 'textarea', value: str(n, item.ti || 1) || '', set(v) { setStr(n, item.ti || 1, v); if (self.isFootprintFile) self.refreshAll(); else self.refresh(item); } },
         ...xy(at, '위치'),
         { label: '각도 (°)', type: 'number', value: num(at, 3), set(v) { setNum(at, 3, normAng(v), 4); self.refresh(item); } },
         { label: '레이어', type: 'select', options: this.layerNames, value: item.layer, set(v) { setRaw(ln, 1, quote(v)); self.refresh(item); } },
@@ -613,7 +856,12 @@ export class PcbDoc {
     return [];
   }
 
+  refreshAll() {
+    for (const it of this.items) this.refresh(it);
+  }
+
   summary() {
+    if (this.isFootprintFile) return '풋프린트 ' + this.fpName + ' · 패드 ' + this.items.filter((it) => it.k === 'pad').length;
     const c = {};
     for (const it of this.items) c[it.k] = (c[it.k] || 0) + 1;
     const parts = [];

@@ -281,3 +281,49 @@ export function measure(text, h) {
   }
   return w * h * 1.38;
 }
+
+// ---------- shape distance (used by snapping, connectivity and DRC) ----------
+// A copper shape is a point / segment / convex polygon `pts` inflated by radius `r`.
+
+function segsIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
+  const d1 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+  const d2 = (bx - ax) * (dy - ay) - (by - ay) * (dx - ax);
+  const d3 = (dx - cx) * (ay - cy) - (dy - cy) * (ax - cx);
+  const d4 = (dx - cx) * (by - cy) - (dy - cy) * (bx - cx);
+  return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0)) && d1 !== 0 && d2 !== 0 && d3 !== 0 && d4 !== 0;
+}
+
+export function segSegDist(ax, ay, bx, by, cx, cy, dx, dy) {
+  if (segsIntersect(ax, ay, bx, by, cx, cy, dx, dy)) return 0;
+  return Math.min(distToSeg(ax, ay, cx, cy, dx, dy), distToSeg(bx, by, cx, cy, dx, dy),
+    distToSeg(cx, cy, ax, ay, bx, by), distToSeg(dx, dy, ax, ay, bx, by));
+}
+
+// Minimum distance between two point lists read as point / segment / closed polygon.
+export function polyDist(P, Q) {
+  const np = P.length >> 1, nq = Q.length >> 1;
+  if (np >= 3 && pointInPoly(Q[0], Q[1], P)) return 0;
+  if (nq >= 3 && pointInPoly(P[0], P[1], Q)) return 0;
+  const ep = np >= 3 ? np : Math.max(1, np - 1);
+  const eq = nq >= 3 ? nq : Math.max(1, nq - 1);
+  let best = Infinity;
+  for (let i = 0; i < ep; i++) {
+    const i2 = (i + 1) % np;
+    const ax = P[2 * i], ay = P[2 * i + 1], bx = P[2 * i2], by = P[2 * i2 + 1];
+    for (let j = 0; j < eq; j++) {
+      const j2 = (j + 1) % nq;
+      const d = segSegDist(ax, ay, bx, by, Q[2 * j], Q[2 * j + 1], Q[2 * j2], Q[2 * j2 + 1]);
+      if (d < best) { best = d; if (d === 0) return 0; }
+    }
+  }
+  return best;
+}
+
+export function shapeDist(a, b) { return polyDist(a.pts, b.pts) - a.r - b.r; }
+export function shapePointDist(s, x, y) { return polyDist(s.pts, [x, y]) - s.r; }
+export function shapeCenter(s) {
+  let x = 0, y = 0;
+  const n = s.pts.length >> 1;
+  for (let i = 0; i < n; i++) { x += s.pts[2 * i]; y += s.pts[2 * i + 1]; }
+  return [x / n, y / n];
+}

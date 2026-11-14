@@ -232,15 +232,18 @@ export class SchDoc {
     prims.sort((a, b) => (b.fillColor === C.symFill ? 1 : 0) - (a.fillColor === C.symFill ? 1 : 0));
     const pinPts = [];
     for (const c of pins) {
-      if (isHidden(c)) continue;
       const at = child(c, 'at');
       if (!at) continue;
       const px = num(at, 1), py = num(at, 2), pa = num(at, 3) * DEG;
       const len = num(child(c, 'length'), 1, 2.54);
       const a = T(px, py);
+      if (isHidden(c)) {   // not drawn, but still a connection point (power symbols)
+        pinPts.push({ x: a[0], y: a[1], number: str(child(c, 'number')) || '', name: str(child(c, 'name')) || '', type: str(c, 1), hidden: true });
+        continue;
+      }
       const b = T(px + len * Math.cos(pa), py + len * Math.sin(pa));
-      pinPts.push(a);
       const shape = str(c, 2);
+      pinPts.push({ x: a[0], y: a[1], number: str(child(c, 'number')) || '', name: str(child(c, 'name')) || '', type: str(c, 1) });
       let dx = b[0] - a[0], dy = b[1] - a[1];
       const L = Math.hypot(dx, dy) || 1;
       dx /= L; dy /= L;
@@ -400,9 +403,11 @@ export class SchDoc {
         ...f, color: isFile ? C.sheetFile : C.sheetName });
       if (/name/i.test(key)) it.name = str(p, 2);
     }
+    it.pinPts = [];
     for (const p of children(n, 'pin')) {
       const pa = child(p, 'at');
       if (!pa) continue;
+      it.pinPts.push([num(pa, 1), num(pa, 2)]);
       this.labelPrims('sheet_pin', str(p, 1) || '', num(pa, 1), num(pa, 2), num(pa, 3) + 180, fontOf(p).h, str(p, 2), it.prims);
     }
     return it;
@@ -465,6 +470,7 @@ export class SchDoc {
   refresh(item) {
     const fresh = this.build(item.n);
     if (fresh) Object.assign(item, fresh);
+    this.rev = (this.rev || 0) + 1;
   }
 
   // ---------- rendering ----------
@@ -571,6 +577,7 @@ export class SchDoc {
     remove(item.n);
     const i = this.items.indexOf(item);
     if (i >= 0) this.items.splice(i, 1);
+    this.rev = (this.rev || 0) + 1;
   }
 
   handles(item) {
@@ -595,6 +602,7 @@ export class SchDoc {
     insert(this.root, node, ['sheet_instances', 'symbol_instances', 'embedded_fonts']);
     const it = this.build(node);
     if (it) this.items.push(it);
+    this.rev = (this.rev || 0) + 1;
     return it;
   }
 

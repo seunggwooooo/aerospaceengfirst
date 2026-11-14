@@ -2,27 +2,42 @@ import { parse, serialize } from './sexpr.js';
 import { PcbDoc } from './pcb.js';
 import { SchDoc } from './sch.js';
 import { snap } from './draw.js';
+import { analyze, DEFAULT_RULES, RULE_LABELS } from './conn.js';
+import { analyzeSch } from './erc.js';
 
 const $ = (id) => document.getElementById(id);
 const cv = $('cv');
 const ctx = cv.getContext('2d');
 const stage = $('stage');
 
+// `state` always mirrors the active tab; the fields in TAB_KEYS are swapped on tab change.
 const state = {
   doc: null,
   fileName: '',
   handle: null,       // File System Access handle (desktop Chromium only)
   sel: [],
-  tool: 'select',
   undo: [],
   redo: [],
   dirty: false,
   padInfo: null,
-  preview: null,      // wire being drawn
+  check: null,        // last DRC / ERC result
+  marker: null,       // violation being looked at
+  tool: 'select',
+  preview: null,      // polyline being drawn
 };
+const TAB_KEYS = ['doc', 'fileName', 'handle', 'sel', 'undo', 'redo', 'dirty', 'padInfo', 'check', 'marker'];
+const tabs = [];
+let cur = -1;
 const view = { k: 4, tx: 0, ty: 0, dpr: 1, w: 0, h: 0 };
 
-// ---------- loading ----------
+let rules = { ...DEFAULT_RULES };
+try { Object.assign(rules, JSON.parse(localStorage.getItem('kicad-pad-rules') || '{}')); } catch (e) { /* defaults */ }
+
+const isBoard = (doc) => doc && doc.kind === 'pcb' && !doc.isFootprintFile;
+const isFp = (doc) => doc && doc.kind === 'pcb' && doc.isFootprintFile;
+const isSheet = (doc) => doc && doc.kind === 'sch' && !doc.isLibFile;
+
+// ---------- documents and tabs ----------
 
 export function makeDoc(text) {
   const root = parse(text);
@@ -31,6 +46,56 @@ export function makeDoc(text) {
     case 'kicad_sch': case 'kicad_symbol_lib': return new SchDoc(root);
   }
   throw new Error('지원하지 않는 파일입니다 (' + root.h + '). KiCad 6 이상의 .kicad_sch / .kicad_pcb / .kicad_mod / .kicad_sym 파일을 열어 주세요.');
+}
+
+function initDoc(doc) {
+  if (doc.kind !== 'pcb') return;
+  if (doc.isFootprintFile) doc.route = { layer: doc.layerNames.includes('F.SilkS') ? 'F.SilkS' : doc.layerNames[0] };
+  else { const d = doc.defaults(); doc.route = { layer: doc.copper[0] || 'F.Cu', width: d.width, viaSize: d.viaSize, viaDrill: d.viaDrill }; }
+}
+
+function stash() {
+  if (cur < 0 || !tabs[cur]) return;
+  const t = tabs[cur];
+  for (const k of TAB_KEYS) t[k] = state[k];
+  t.view = { k: view.k, tx: view.tx, ty: view.ty };
+}
+
+function activate(i) {
+  stash();
+  close3D();
+  cur = i;
+  const t = tabs[i];
+  for (const k of TAB_KEYS) state[k] = t[k];
+  state.preview = null;
+  const doc = state.doc;
+  document.body.classList.add('has-doc');
+  document.body.classList.toggle('is-sch', isSheet(doc));
+  document.body.classList.toggle('is-pcb', isBoard(doc));
+  document.body.classList.toggle('is-fp', isFp(doc));
+  const gs = $('gridSel');
+  gs.innerHTML = '';
+  for (const g of doc.gridOptions) gs.add(new Option(g + ' mm', g, false, g === doc.grid));
+  const ss = $('symSel');
+  ss.hidden = !doc.isLibFile;
+  if (doc.isLibFile) {
+    ss.innerHTML = '';
+    for (const s of doc.symbolNames) ss.add(new Option(s, s, false, s === doc.currentSymbol));
+  }
+  const ls = $('layerSel');
+  ls.innerHTML = '';
+  if (doc.kind === 'pcb') {
+    for (const l of (doc.isFootprintFile ? doc.layerNames : doc.copper)) ls.add(new Option(l, l, false, l === doc.route.layer));
+    if (!doc.isFootprintFile) $('widthInp').value = doc.route.width;
+  }
+  setTool('select');
+  if (window.innerWidth > 760) $('panel').hidden = false;
+  if (!isBoard(doc) && !isSheet(doc) && !$('checkBody').hidden) showPanel('props');
+  if (isSheet(doc) && !$('layersBody').hidden) showPanel('props');
+  resize();
+  if (t.view) Object.assign(view, t.view); else fit();
+  if (!state.check || state.check.rev !== (doc.rev || 0)) runCheck();
+  refreshUi();
 }
 
 function loadText(text, name, handle) {
@@ -42,36 +107,35 @@ function loadText(text, name, handle) {
     toast(e.message || String(e), true);
     return false;
   }
-  state.doc = doc;
-  state.fileName = name;
-  state.handle = handle || null;
-  state.sel = [];
-  state.undo = [];
-  state.redo = [];
-  state.dirty = false;
-  state.padInfo = null;
-  setTool('select');
-  document.body.classList.add('has-doc');
-  document.body.classList.toggle('is-sch', doc.kind === 'sch' && !doc.isLibFile);
-  document.body.classList.toggle('is-pcb', doc.kind === 'pcb');
-  const gs = $('gridSel');
-  gs.innerHTML = '';
-  for (const g of doc.gridOptions) gs.add(new Option(g + ' mm', g, false, g === doc.grid));
-  const ss = $('symSel');
-  ss.hidden = !doc.isLibFile;
-  if (doc.isLibFile) {
-    ss.innerHTML = '';
-    for (const s of doc.symbolNames) ss.add(new Option(s, s));
-  }
-  if (window.innerWidth > 760) $('panel').hidden = false;
-  resize();
-  fit();
-  refreshUi();
+  initDoc(doc);
+  stash();
+  tabs.push({ doc, fileName: name, handle: handle || null, sel: [], undo: [], redo: [], dirty: false, padInfo: null, check: null, marker: null, view: null });
+  activate(tabs.length - 1);
   return true;
 }
 
+function closeTab(i) {
+  stash();
+  const t = tabs[i];
+  if (t.dirty && !confirm(t.fileName + ' — 저장하지 않은 변경 사항이 있습니다. 닫을까요?')) return;
+  tabs.splice(i, 1);
+  if (!tabs.length) {
+    cur = -1;
+    close3D();
+    Object.assign(state, { doc: null, fileName: '', handle: null, sel: [], undo: [], redo: [], dirty: false, padInfo: null, check: null, marker: null });
+    document.body.classList.remove('has-doc', 'is-sch', 'is-pcb', 'is-fp');
+    $('panel').hidden = true;
+    document.title = 'KiCad Pad Editor';
+    renderTabs();
+    resize();
+    return;
+  }
+  const next = i < cur ? cur - 1 : Math.min(cur === i ? i : cur, tabs.length - 1);
+  cur = -1;
+  activate(next);
+}
+
 async function openFile(file, handle) {
-  if (state.dirty && !confirm('저장하지 않은 변경 사항이 있습니다. 다른 파일을 열까요?')) return;
   const text = await file.text();
   if (loadText(text, file.name, handle)) saveDraft();
 }
@@ -123,14 +187,10 @@ async function save() {
   markSaved('내려받았습니다: ' + state.fileName + ' (파일 앱 › 다운로드)');
 }
 
-function shareFile() {
-  return new File([currentText()], state.fileName, { type: 'text/plain' });
-}
-
 async function share() {
   if (!state.doc) return;
   try {
-    await navigator.share({ files: [shareFile()], title: state.fileName });
+    await navigator.share({ files: [new File([currentText()], state.fileName, { type: 'text/plain' })], title: state.fileName });
     markSaved('공유했습니다');
   } catch (e) {
     if (e && e.name !== 'AbortError') toast('공유할 수 없습니다. “저장”을 사용해 주세요.', true);
@@ -185,16 +245,16 @@ function checkpoint() {
 
 function restoreText(text) {
   const old = state.doc;
-  if (old.kind === 'pcb') {
-    PcbDoc.savedVisibility = Object.fromEntries(old.layers.map((l) => [l.name, l.visible]));
-  }
+  if (old.kind === 'pcb') PcbDoc.savedVisibility = Object.fromEntries(old.layers.map((l) => [l.name, l.visible]));
   const doc = makeDoc(text);
   doc.grid = old.grid;
-  if (old.kind === 'pcb') { doc.showZoneFill = old.showZoneFill; doc.hlNet = old.hlNet; }
+  if (old.kind === 'pcb') { doc.showZoneFill = old.showZoneFill; doc.hlNet = old.hlNet; doc.route = old.route; }
   if (old.isLibFile) doc.showLibSymbol(old.currentSymbol);
   state.doc = doc;
   state.sel = [];
   state.padInfo = null;
+  state.check = null;
+  state.marker = null;
 }
 
 function undo() {
@@ -202,7 +262,7 @@ function undo() {
   state.redo.push(currentText());
   restoreText(state.undo.pop());
   state.dirty = true;
-  changed(false);
+  changed();
 }
 
 function redo() {
@@ -210,11 +270,42 @@ function redo() {
   state.undo.push(currentText());
   restoreText(state.redo.pop());
   state.dirty = true;
-  changed(false);
+  changed();
 }
 
 function changed() {
   saveDraft();
+  state.marker = null;
+  scheduleCheck();
+  refreshUi();
+}
+
+// ---------- connection / rule checks ----------
+
+let checkTimer = 0;
+function runCheck() {
+  clearTimeout(checkTimer);
+  const doc = state.doc;
+  if (isBoard(doc)) state.check = analyze(doc, rules);
+  else if (isSheet(doc)) state.check = analyzeSch(doc);
+  else state.check = null;
+  return state.check;
+}
+function scheduleCheck() {
+  clearTimeout(checkTimer);
+  const doc = state.doc;
+  if (!isBoard(doc) && !isSheet(doc)) return;
+  checkTimer = setTimeout(() => { if (state.doc === doc) { runCheck(); refreshUi(); } }, doc.items.length > 4000 ? 700 : 200);
+}
+const checkFresh = () => state.check && state.doc && state.check.rev === (state.doc.rev || 0);
+
+function gotoViolation(v) {
+  state.marker = v;
+  state.sel = v.items.filter((it) => state.doc.items.includes(it)).slice(0, 1);
+  const k = Math.max(view.k, state.doc.kind === 'pcb' ? 14 : 7);
+  view.k = k;
+  view.tx = view.w / 2 - v.x * k;
+  view.ty = view.h / 2 - v.y * k;
   refreshUi();
 }
 
@@ -237,6 +328,7 @@ function fit() {
   const m = 28;
   view.k = Math.min((view.w - 2 * m) / bw, (view.h - 2 * m) / bh);
   if (!(view.k > 0)) view.k = 4;
+  view.k = Math.min(view.k, 60);
   view.tx = view.w / 2 - ((b[0] + b[2]) / 2) * view.k;
   view.ty = view.h / 2 - ((b[1] + b[3]) / 2) * view.k;
   requestDraw();
@@ -270,27 +362,61 @@ function draw() {
   ctx.setTransform(d * view.k, 0, 0, d * view.k, d * view.tx, d * view.ty);
   drawGrid(doc);
   doc.draw(ctx, view, state.sel);
+  const px = 1 / view.k;
 
-  // handles of the selected item
+  if (checkFresh()) {
+    const c = state.check;
+    if (c.ratsnest.length) {
+      ctx.beginPath();
+      for (const r of c.ratsnest) { ctx.moveTo(r[0], r[1]); ctx.lineTo(r[2], r[3]); }
+      ctx.lineWidth = 1.2 * px;
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.setLineDash([5 * px, 4 * px]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.lineWidth = 2 * px;
+    let n = 0;
+    for (const v of c.violations) {
+      if (v.type === 'unconnected') continue;
+      if (++n > 250) break;
+      ctx.beginPath();
+      ctx.arc(v.x, v.y, 7 * px, 0, Math.PI * 2);
+      ctx.strokeStyle = v.sev === 'error' ? '#ff4d4f' : '#e0a100';
+      ctx.stroke();
+    }
+  }
+  if (state.marker) {
+    const v = state.marker;
+    ctx.beginPath();
+    ctx.arc(v.x, v.y, 15 * px, 0, Math.PI * 2);
+    ctx.lineWidth = 3 * px;
+    ctx.strokeStyle = '#ffd24d';
+    ctx.stroke();
+  }
+
   const hs = state.sel.length === 1 ? doc.handles(state.sel[0]) : [];
   for (const [hx, hy] of hs) {
     ctx.beginPath();
-    ctx.arc(hx, hy, 6 / view.k, 0, Math.PI * 2);
+    ctx.arc(hx, hy, 6 * px, 0, Math.PI * 2);
     ctx.fillStyle = '#ffffff';
     ctx.fill();
-    ctx.lineWidth = 2 / view.k;
+    ctx.lineWidth = 2 * px;
     ctx.strokeStyle = '#e8590c';
     ctx.stroke();
   }
   if (state.preview) {
     const p = state.preview;
     ctx.beginPath();
-    ctx.moveTo(p[0], p[1]);
-    ctx.lineTo(p[2], p[1]);
-    ctx.lineTo(p[2], p[3]);
-    ctx.lineWidth = 2 / view.k;
-    ctx.strokeStyle = '#e8590c';
+    ctx.moveTo(p.pts[0], p.pts[1]);
+    for (let i = 2; i < p.pts.length; i += 2) ctx.lineTo(p.pts[i], p.pts[i + 1]);
+    ctx.lineWidth = Math.max(p.w || 0, 2 * px);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = p.color || '#e8590c';
+    ctx.globalAlpha = 0.85;
     ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 }
 
@@ -307,15 +433,84 @@ function drawGrid(doc) {
   }
 }
 
+// ---------- drawing tools (wire / track / footprint line) ----------
+
+const DRAW_TOOLS = new Set(['wire', 'route', 'fpline']);
+
+// KiCad-style posture: 45° first, then straight.
+function bend45(x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const d = Math.min(Math.abs(dx), Math.abs(dy));
+  if (d < 1e-6 || Math.abs(Math.abs(dx) - Math.abs(dy)) < 1e-6) return [x1, y1, x2, y2];
+  return [x1, y1, x1 + Math.sign(dx) * d, y1 + Math.sign(dy) * d, x2, y2];
+}
+
+function drawStart(g, tol) {
+  const doc = state.doc;
+  if (state.tool === 'route') {
+    g.a0 = doc.anchorAt(g.wx, g.wy, tol, doc.route.layer);
+    g.p0 = g.a0 ? [g.a0.x, g.a0.y] : [snap(g.wx, doc.grid), snap(g.wy, doc.grid)];
+  } else g.p0 = [snap(g.wx, doc.grid), snap(g.wy, doc.grid)];
+}
+
+function drawMove(g, wx, wy, tol) {
+  const doc = state.doc;
+  if (state.tool === 'route') {
+    g.a1 = doc.anchorAt(wx, wy, tol, doc.route.layer);
+    const p1 = g.a1 ? [g.a1.x, g.a1.y] : [snap(wx, doc.grid), snap(wy, doc.grid)];
+    const layer = doc.layers.find((l) => l.name === doc.route.layer);
+    state.preview = { pts: bend45(g.p0[0], g.p0[1], p1[0], p1[1]), w: doc.route.width, color: layer ? layer.color : '#e8590c' };
+  } else if (state.tool === 'wire') {
+    const x = snap(wx, doc.grid), y = snap(wy, doc.grid);
+    state.preview = { pts: [g.p0[0], g.p0[1], x, g.p0[1], x, y] };
+  } else {
+    state.preview = { pts: [g.p0[0], g.p0[1], snap(wx, doc.grid), snap(wy, doc.grid)] };
+  }
+}
+
+function drawEnd(g) {
+  const doc = state.doc;
+  const p = state.preview;
+  state.preview = null;
+  if (!p) return;
+  const pts = p.pts;
+  if (Math.hypot(pts[pts.length - 2] - pts[0], pts[pts.length - 1] - pts[1]) < 1e-6) { requestDraw(); return; }
+  checkpoint();
+  const made = [];
+  if (state.tool === 'route') {
+    const n0 = g.a0 && g.a0.net, n1 = g.a1 && g.a1.net;
+    const net = n0 || n1 || null;
+    for (let i = 0; i + 3 < pts.length; i += 2) {
+      const it = doc.addTrack(pts[i], pts[i + 1], pts[i + 2], pts[i + 3], doc.route.width, doc.route.layer, net);
+      if (it) made.push(it);
+    }
+    changed();
+    const res = runCheck();
+    const bad = res.violations.find((v) => v.type !== 'unconnected' && v.items.some((it) => made.includes(it)));
+    if (bad) { state.marker = bad; toast('DRC: ' + bad.msg, true); }
+    else if (n0 && n1 && n0 !== n1) toast(`서로 다른 네트를 이었습니다: ${n0} ↔ ${n1}`, true);
+    else if (!net) toast('네트가 없는 배선입니다. 패드나 기존 배선에서 시작하면 네트가 지정됩니다.');
+    else toast(`${net} 배선 추가 · DRC 통과`);
+    refreshUi();
+    return;
+  }
+  for (let i = 0; i + 3 < pts.length; i += 2) {
+    if (state.tool === 'wire') doc.addWire(pts[i], pts[i + 1], pts[i + 2], pts[i + 3]);
+    else doc.addFpLine(pts[i], pts[i + 1], pts[i + 2], pts[i + 3], doc.route.layer);
+  }
+  changed();
+}
+
 // ---------- pointer input ----------
 
 const pointers = new Map();
-let gesture = null;   // {mode, ...}
+let gesture = null;
 
 function localPos(e) {
   const r = cv.getBoundingClientRect();
   return [e.clientX - r.left, e.clientY - r.top];
 }
+const tolFor = (touch) => (touch ? 14 : 7) / view.k;
 
 cv.addEventListener('pointerdown', (e) => {
   if (!state.doc) return;
@@ -331,12 +526,13 @@ cv.addEventListener('pointerdown', (e) => {
   if (pointers.size > 2) return;
   const [wx, wy] = toWorld(sx, sy);
   const doc = state.doc;
-  const tol = (e.pointerType === 'touch' ? 14 : 7) / view.k;
+  const touch = e.pointerType === 'touch';
+  const tol = tolFor(touch);
   let mode = 'pan';
   let handle = -1;
-  if (state.tool === 'wire') mode = 'wire';
+  if (e.button === 1 || e.button === 2) mode = 'pan';
+  else if (DRAW_TOOLS.has(state.tool)) mode = 'draw';
   else if (state.tool !== 'select') mode = 'place';
-  else if (e.button === 1 || e.button === 2) mode = 'pan';
   else if (state.sel.length === 1) {
     const it = state.sel[0];
     const hs = doc.handles(it);
@@ -346,7 +542,8 @@ cv.addEventListener('pointerdown', (e) => {
     if (handle >= 0) mode = 'handle';
     else if (doc.canMove(it) && doc.hitAll(wx, wy, tol).includes(it)) mode = 'move';
   }
-  gesture = { mode, handle, sx, sy, wx, wy, lastX: sx, lastY: sy, moved: false, applied: [0, 0], touch: e.pointerType === 'touch', started: false };
+  gesture = { mode, handle, sx, sy, wx, wy, lastX: sx, lastY: sy, moved: false, applied: [0, 0], touch, started: false };
+  if (mode === 'draw') drawStart(gesture, tol);
 });
 
 cv.addEventListener('pointermove', (e) => {
@@ -390,10 +587,17 @@ cv.addEventListener('pointermove', (e) => {
     }
   } else if (g.mode === 'handle') {
     if (!g.started) { checkpoint(); g.started = true; }
-    doc.moveHandle(state.sel[0], g.handle, snap(wx, doc.grid), snap(wy, doc.grid));
+    let x = snap(wx, doc.grid), y = snap(wy, doc.grid);
+    const it = state.sel[0];
+    if (it.k === 'seg') {   // track ends snap onto pads, vias and other track ends
+      const a = doc.anchorAt(wx, wy, tolFor(g.touch), it.layer);
+      const other = g.handle === 0 ? [it.x2, it.y2] : [it.x1, it.y1];
+      if (a && Math.hypot(a.x - other[0], a.y - other[1]) > 1e-6) { x = a.x; y = a.y; }
+    }
+    doc.moveHandle(it, g.handle, x, y);
     requestDraw();
-  } else if (g.mode === 'wire') {
-    state.preview = [snap(g.wx, doc.grid), snap(g.wy, doc.grid), snap(wx, doc.grid), snap(wy, doc.grid)];
+  } else if (g.mode === 'draw') {
+    drawMove(g, wx, wy, tolFor(g.touch));
     requestDraw();
   }
   showCoords(sx, sy);
@@ -403,22 +607,9 @@ function endGesture(cancel) {
   const g = gesture;
   gesture = null;
   if (!g) return;
-  if (g.mode === 'wire') {
-    const p = state.preview;
-    state.preview = null;
-    if (p && !cancel) {
-      const doc = state.doc;
-      if (p[0] !== p[2] || p[1] !== p[3]) {
-        checkpoint();
-        doc.addWire(p[0], p[1], p[2], p[1]);
-        doc.addWire(p[2], p[1], p[2], p[3]);
-        changed();
-      }
-    }
-    requestDraw();
-  } else if ((g.mode === 'move' || g.mode === 'handle') && g.started) {
-    changed();
-  }
+  if (g.mode === 'draw') {
+    if (cancel) { state.preview = null; requestDraw(); } else drawEnd(g);
+  } else if ((g.mode === 'move' || g.mode === 'handle') && g.started) changed();
 }
 
 function pointerUp(e) {
@@ -428,7 +619,7 @@ function pointerUp(e) {
   const g = gesture;
   if (!g) return;
   if (g.mode === 'pinch') { if (pointers.size < 2) gesture = null; return; }
-  if (!g.moved && e.type === 'pointerup') { gesture = null; tap(sx, sy, g); return; }
+  if (!g.moved && e.type === 'pointerup') { gesture = null; state.preview = null; tap(sx, sy, g); return; }
   endGesture(e.type !== 'pointerup');
 }
 cv.addEventListener('pointerup', pointerUp);
@@ -463,24 +654,44 @@ async function tap(sx, sy, g) {
   const doc = state.doc;
   const [wx, wy] = toWorld(sx, sy);
   const gx = snap(wx, doc.grid), gy = snap(wy, doc.grid);
-  if (state.tool === 'select') {
-    const tol = (g.touch ? 14 : 7) / view.k;
-    const hits = doc.hitAll(wx, wy, tol);
+  const tool = state.tool;
+  if (tool === 'select') {
+    const hits = doc.hitAll(wx, wy, tolFor(g.touch));
     let pick = hits[0] || null;
     if (state.sel.length === 1 && hits.length > 1) {
       const i = hits.indexOf(state.sel[0]);
       if (i >= 0) pick = hits[(i + 1) % hits.length];
     }
     state.sel = pick ? [pick] : [];
+    state.marker = null;
     state.padInfo = pick && doc.kind === 'pcb' ? doc.padAt(pick, wx, wy) : null;
-    if (pick && window.innerWidth > 760) showPanel('props');
+    if (pick && window.innerWidth > 760 && $('checkBody').hidden) showPanel('props');
     refreshUi();
     return;
   }
-  if (state.tool === 'junction') { checkpoint(); doc.addJunction(gx, gy); changed(); return; }
-  if (state.tool === 'nc') { checkpoint(); doc.addNoConnect(gx, gy); changed(); return; }
-  if (state.tool === 'label' || state.tool === 'text') {
-    const isLabel = state.tool === 'label';
+  if (tool === 'junction') { checkpoint(); doc.addJunction(gx, gy); changed(); return; }
+  if (tool === 'nc') { checkpoint(); doc.addNoConnect(gx, gy); changed(); return; }
+  if (tool === 'pad') { checkpoint(); const it = doc.addPad(gx, gy); state.sel = it ? [it] : []; setTool('select', true); changed(); return; }
+  if (tool === 'via') {
+    const r = doc.route;
+    const a = doc.anchorAt(wx, wy, tolFor(g.touch), r.layer);
+    const x = a ? a.x : gx, y = a ? a.y : gy;
+    const net = (a && a.net) || doc.netAt(x, y, r.layer);
+    checkpoint();
+    const it = doc.addVia(x, y, r.viaSize, r.viaDrill, net);
+    const first = doc.copper[0], last = doc.copper[doc.copper.length - 1];
+    r.layer = r.layer === first ? last : first;
+    $('layerSel').value = r.layer;
+    changed();
+    const res = runCheck();
+    const bad = res.violations.find((v) => v.type !== 'unconnected' && v.items.includes(it));
+    if (bad) { state.marker = bad; toast('DRC: ' + bad.msg, true); }
+    else toast(`비아 추가${net ? ' (' + net + ')' : ''} · 이제 ${r.layer} 에 배선합니다`);
+    refreshUi();
+    return;
+  }
+  if (tool === 'label' || tool === 'text') {
+    const isLabel = tool === 'label';
     const text = await ask(isLabel ? '라벨 (네트 이름)' : '텍스트 내용', '');
     if (!text) return;
     checkpoint();
@@ -505,16 +716,21 @@ const HINTS = {
   junction: '접점을 놓을 곳을 탭하세요',
   nc: '미연결 표시를 놓을 핀 끝을 탭하세요',
   text: '텍스트를 놓을 곳을 탭하세요',
+  route: '패드·비아·배선 끝에서 끌어서 연결합니다 (끝점은 자동으로 붙습니다)',
+  via: '비아를 놓을 곳을 탭하세요 — 놓은 뒤 반대쪽 면으로 전환됩니다',
+  pad: '패드를 놓을 곳을 탭하세요 (직전 패드의 모양을 이어받습니다)',
+  fpline: '끌어서 선을 긋습니다 — 레이어는 위에서 고릅니다',
 };
 
-function setTool(t) {
+function setTool(t, keepSel) {
   state.tool = t;
+  state.preview = null;
   for (const b of document.querySelectorAll('[data-tool]')) b.classList.toggle('on', b.dataset.tool === t);
   const h = $('hint');
   h.hidden = !HINTS[t];
   h.textContent = HINTS[t] || '';
   cv.style.cursor = t === 'select' ? 'default' : 'crosshair';
-  if (t !== 'select') { state.sel = []; refreshUi(); }
+  if (t !== 'select' && !keepSel) { state.sel = []; refreshUi(); }
 }
 
 function rotateSel() {
@@ -528,10 +744,9 @@ function rotateSel() {
 
 function deleteSel() {
   const doc = state.doc;
-  const items = state.sel.filter((it) => !it.fixed);
-  if (!items.length) return;
+  if (!state.sel.length || doc.isLibFile) return;
   checkpoint();
-  for (const it of items) doc.remove(it);
+  for (const it of state.sel) doc.remove(it);
   state.sel = [];
   state.padInfo = null;
   changed();
@@ -544,32 +759,63 @@ function showPanel(tab) {
     for (const b of p.querySelectorAll('[data-tab]')) b.classList.toggle('on', b.dataset.tab === tab);
     $('propsBody').hidden = tab !== 'props';
     $('layersBody').hidden = tab !== 'layers';
+    $('checkBody').hidden = tab !== 'check';
   }
   resize();
+}
+
+// 3D view (three.js is only loaded when first opened)
+let v3 = null;
+function close3D() {
+  if (v3) { v3.dispose(); v3 = null; }
+  $('view3d').hidden = true;
+}
+async function toggle3D() {
+  if (v3) { close3D(); return; }
+  if (!isBoard(state.doc)) return;
+  const host = $('view3d');
+  host.hidden = false;
+  try {
+    const mod = await import('./view3d.js');
+    v3 = mod.open3D(state.doc, host);
+    $('v3parts').classList.add('on');
+  } catch (e) {
+    host.hidden = true;
+    toast('3D 보기를 열 수 없습니다: ' + (e.message || e), true);
+  }
 }
 
 const actions = {
   open() {
     if (window.showOpenFilePicker) {
-      window.showOpenFilePicker().then(async ([h]) => openFile(await h.getFile(), h)).catch(() => {});
+      window.showOpenFilePicker({ multiple: true }).then(async (hs) => { for (const h of hs) await openFile(await h.getFile(), h); }).catch(() => {});
     } else $('fileInput').click();
   },
   save, share, undo, redo, fit,
   rotate: rotateSel,
   delete: deleteSel,
   panel() { const p = $('panel'); p.hidden = !p.hidden; resize(); },
+  check() { runCheck(); showPanel('check'); refreshUi(); },
+  view3d: toggle3D,
+  v3iso() { if (v3) v3.look('iso'); },
+  v3top() { if (v3) v3.look('top'); },
+  v3bottom() { if (v3) v3.look('bottom'); },
+  v3parts() { if (v3) $('v3parts').classList.toggle('on', v3.toggleParts()); },
   async restore() {
     const d = await kv('readonly', (s) => s.get('draft'));
     if (d && loadText(d.text, d.name)) { state.dirty = !!d.dirty; refreshUi(); }
   },
 };
 
-function activate(t) {
+function fire(t) {
   if (t.dataset.act) actions[t.dataset.act]();
   else if (t.dataset.tool) setTool(t.dataset.tool);
   else if (t.dataset.tab) showPanel(t.dataset.tab);
   else if (t.dataset.sample) openSample(t.dataset.sample);
+  else if (t.dataset.doc) activate(+t.dataset.doc);
+  else if (t.dataset.close) closeTab(+t.dataset.close);
 }
+const CLICKABLE = '[data-act],[data-tool],[data-tab],[data-sample],[data-doc],[data-close]';
 
 // Touch browsers can swallow the click of a tap that quickly follows another
 // touch (e.g. undo right after a drag), so finger/pencil taps on buttons are
@@ -578,41 +824,55 @@ const NEEDS_CLICK = new Set(['open', 'save', 'share', 'restore']);
 let press = null;
 let handled = null;
 document.addEventListener('pointerdown', (e) => {
-  const t = e.pointerType === 'mouse' ? null : e.target.closest('[data-act],[data-tool],[data-tab]');
-  press = t && !t.disabled && !NEEDS_CLICK.has(t.dataset.act) ? { t, x: e.clientX, y: e.clientY, id: e.pointerId } : null;
+  const t = e.pointerType === 'mouse' ? null : e.target.closest(CLICKABLE);
+  press = t && !t.disabled && !t.dataset.sample && !NEEDS_CLICK.has(t.dataset.act) ? { t, x: e.clientX, y: e.clientY, id: e.pointerId } : null;
 });
 document.addEventListener('pointerup', (e) => {
   const p = press;
   press = null;
   if (!p || p.id !== e.pointerId || Math.hypot(e.clientX - p.x, e.clientY - p.y) > 12) return;
-  if (e.target.closest('[data-act],[data-tool],[data-tab]') !== p.t || p.t.disabled) return;
-  handled = { t: p.t, at: performance.now() };
-  activate(p.t);
+  if (e.target.closest(CLICKABLE) !== p.t || p.t.disabled) return;
+  handled = { at: performance.now(), x: e.clientX, y: e.clientY };
+  fire(p.t);
 });
 document.addEventListener('pointercancel', () => { press = null; });
 
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-act],[data-tool],[data-tab],[data-sample]');
+  const t = e.target.closest(CLICKABLE);
   if (!t) return;
-  if (handled && handled.t === t && performance.now() - handled.at < 800) { handled = null; return; }
-  activate(t);
+  // the click that follows a tap already handled on pointerup (the button under
+  // the finger may have been re-rendered since, so compare position, not element)
+  if (handled && performance.now() - handled.at < 800 && Math.hypot(e.clientX - handled.x, e.clientY - handled.y) < 24) { handled = null; return; }
+  fire(t);
 });
 
-$('fileInput').addEventListener('change', (e) => {
-  const f = e.target.files[0];
+$('fileInput').addEventListener('change', async (e) => {
+  const files = [...e.target.files];
   e.target.value = '';
-  if (f) openFile(f);
+  for (const f of files) await openFile(f);
 });
 $('gridSel').addEventListener('change', (e) => { if (state.doc) { state.doc.grid = parseFloat(e.target.value); requestDraw(); } });
 $('symSel').addEventListener('change', (e) => { state.doc.showLibSymbol(e.target.value); state.sel = []; fit(); refreshUi(); });
+$('layerSel').addEventListener('change', (e) => {
+  const doc = state.doc;
+  if (!doc || !doc.route) return;
+  doc.route.layer = e.target.value;
+  const l = doc.layers.find((x) => x.name === e.target.value);
+  if (l && !l.visible) { l.visible = true; refreshUi(); }
+});
+$('widthInp').addEventListener('change', (e) => {
+  const doc = state.doc;
+  const v = parseFloat(e.target.value.replace(',', '.'));
+  if (doc && doc.route && v > 0) doc.route.width = v;
+  if (doc && doc.route) e.target.value = doc.route.width;
+});
 
 window.addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('drop'); });
 window.addEventListener('dragleave', () => document.body.classList.remove('drop'));
-window.addEventListener('drop', (e) => {
+window.addEventListener('drop', async (e) => {
   e.preventDefault();
   document.body.classList.remove('drop');
-  const f = e.dataTransfer.files[0];
-  if (f) openFile(f);
+  for (const f of [...e.dataTransfer.files]) await openFile(f);
 });
 
 window.addEventListener('keydown', (e) => {
@@ -620,7 +880,8 @@ window.addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
   const k = e.key.toLowerCase();
   if (mod && k === 'o') { e.preventDefault(); actions.open(); return; }
-  if (!state.doc) return;
+  const doc = state.doc;
+  if (!doc) return;
   if (mod && k === 's') { e.preventDefault(); save(); }
   else if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   else if (mod && k === 'y') { e.preventDefault(); redo(); }
@@ -628,15 +889,20 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'delete' || k === 'backspace') { e.preventDefault(); deleteSel(); }
   else if (k === 'r') rotateSel();
   else if (k === 'f') fit();
-  else if (k === 'escape') { setTool('select'); state.sel = []; refreshUi(); }
-  else if (state.doc.kind === 'sch' && !state.doc.isLibFile) {
+  else if (k === 'escape') { if (v3) close3D(); setTool('select'); state.sel = []; refreshUi(); }
+  else if (isSheet(doc)) {
     const map = { w: 'wire', l: 'label', j: 'junction', q: 'nc', t: 'text' };
     if (map[k]) setTool(map[k]);
+  } else if (isBoard(doc)) {
+    if (k === 'x') setTool('route'); else if (k === 'v') setTool('via');
   }
 });
 
 window.addEventListener('resize', resize);
-window.addEventListener('beforeunload', (e) => { if (state.dirty) { e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('beforeunload', (e) => {
+  stash();
+  if (tabs.some((t) => t.dirty)) { e.preventDefault(); e.returnValue = ''; }
+});
 
 // ---------- UI rendering ----------
 
@@ -671,13 +937,40 @@ function fieldEl(f) {
       v = parseFloat(v.replace(',', '.'));
       if (!Number.isFinite(v)) { refreshUi(); return; }
     }
-    checkpoint();
+    if (!f.plain) checkpoint();
     f.set(v);
-    changed();
+    if (!f.plain) changed();
   });
   if (f.type !== 'textarea') input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); });
   wrap.append(input);
   return wrap;
+}
+
+const KIND_LABEL = (doc) => (doc.kind === 'sch' ? (doc.isLibFile ? '심볼' : '회로도') : (doc.isFootprintFile ? '풋프린트' : 'PCB'));
+
+function renderTabs() {
+  const nav = $('doctabs');
+  nav.textContent = '';
+  tabs.forEach((t, i) => {
+    const dirty = i === cur ? state.dirty : t.dirty;
+    const name = i === cur ? state.fileName : t.fileName;
+    nav.append(el('div', { class: 'doctab' + (i === cur ? ' on' : '') },
+      el('span', { class: 'kind' }, KIND_LABEL(t.doc)),
+      el('button', { class: 'name', 'data-doc': i, title: name }, name, dirty ? el('span', { class: 'dirty' }, ' ●') : null),
+      el('button', { class: 'x', 'data-close': i, title: '닫기' }, '×')));
+  });
+}
+
+// The same part in another open file (schematic symbol <-> PCB footprint).
+function crossProbe(it) {
+  const want = it.k === 'symbol' ? 'fp' : it.k === 'fp' ? 'symbol' : null;
+  if (!want || !it.ref || it.ref[0] === '#') return null;
+  for (let i = 0; i < tabs.length; i++) {
+    if (i === cur) continue;
+    const other = tabs[i].doc.items.find((o) => o.k === want && o.ref === it.ref);
+    if (other) return { i, other, label: want === 'fp' ? 'PCB에서 보기' : '회로도에서 보기' };
+  }
+  return null;
 }
 
 function renderProps() {
@@ -689,8 +982,12 @@ function renderProps() {
     body.append(el('h2', null, state.fileName));
     body.append(el('p', { class: 'empty' }, doc.summary() || ''));
     body.append(el('p', { class: 'empty' }, '항목을 탭하면 선택됩니다. 선택한 항목을 끌어서 옮기고, 여기에서 값을 고칠 수 있습니다. 같은 자리를 다시 탭하면 겹친 다른 항목으로 넘어갑니다.'));
-    if (doc.kind === 'pcb' && doc.hlNet) {
-      body.append(el('button', { class: 'panel-btn on', onclick() { doc.hlNet = null; refreshUi(); } }, '네트 강조 끄기: ' + doc.hlNet));
+    if (isBoard(doc)) {
+      const r = doc.route;
+      body.append(el('div', { class: 'row2' },
+        fieldEl({ label: '새 비아 지름', type: 'number', value: r.viaSize, plain: true, set(v) { if (v > 0) r.viaSize = v; } }),
+        fieldEl({ label: '새 비아 드릴', type: 'number', value: r.viaDrill, plain: true, set(v) { if (v > 0) r.viaDrill = v; } })));
+      if (doc.hlNet) body.append(el('button', { class: 'panel-btn on', onclick() { doc.hlNet = null; refreshUi(); } }, '네트 강조 끄기: ' + doc.hlNet));
     }
     return;
   }
@@ -704,6 +1001,16 @@ function renderProps() {
       i++;
     } else body.append(fieldEl(a));
   }
+  const probe = crossProbe(it);
+  if (probe) {
+    body.append(el('button', { class: 'panel-btn', onclick() {
+      activate(probe.i);
+      state.sel = [probe.other];
+      const b = probe.other.bb;
+      if (b) { view.tx = view.w / 2 - ((b[0] + b[2]) / 2) * view.k; view.ty = view.h / 2 - ((b[1] + b[3]) / 2) * view.k; }
+      refreshUi();
+    } }, probe.label + ': ' + it.ref));
+  }
   if (doc.kind === 'pcb') {
     const pad = state.padInfo;
     if (pad) body.append(fieldEl({ label: '탭한 패드', type: 'info', value: pad.pad + (pad.net ? '  ·  네트 ' + pad.net : '  ·  연결 없음') }));
@@ -713,9 +1020,24 @@ function renderProps() {
       body.append(el('button', { class: 'panel-btn' + (on ? ' on' : ''), onclick() { doc.hlNet = on ? null : net; refreshUi(); } },
         on ? '네트 강조 끄기' : '이 네트 강조: ' + net));
     }
-    if (it.k === 'fp' || it.k === 'seg' || it.k === 'via') {
-      body.append(el('p', { class: 'note' }, '부품을 옮겨도 연결된 배선은 따라오지 않고, 영역(zone) 채움도 다시 계산되지 않습니다. KiCad에서 열어 B 키로 영역을 다시 채우고 DRC를 확인하세요.'));
-    }
+  }
+  // rule status of this one connection / part
+  if (checkFresh() && (it.cu || it.k === 'symbol' || it.k === 'wire' || it.k === 'label')) {
+    const vs = state.check.violations.filter((v) => v.items.includes(it));
+    if (vs.length) {
+      const box = el('div', { class: 'drc-bad' }, el('b', null, (state.check.kind === 'drc' ? 'DRC' : 'ERC') + ' 문제 ' + vs.length + '건'));
+      for (const v of vs.slice(0, 6)) box.append(el('button', { class: 'viol' + (v.sev === 'warn' ? ' warn' : ''), onclick() { gotoViolation(v); } }, el('i'), v.msg));
+      body.append(box);
+    } else if (state.check.kind === 'drc') {
+      const g = state.check.gap.get(it);
+      const R = state.check.rules;
+      body.append(el('div', { class: 'drc-ok' }, 'DRC 통과 · ' + (g !== undefined && g < Infinity
+        ? `다른 네트와 가장 가까운 간격 ${g.toFixed(3)} mm (기준 ${R.clearance} mm)`
+        : `주변 ${R.clearance} mm 안에 다른 네트 없음`)));
+    } else body.append(el('div', { class: 'drc-ok' }, '연결 검사 통과'));
+  }
+  if (isBoard(doc) && (it.k === 'fp' || it.k === 'seg' || it.k === 'via')) {
+    body.append(el('p', { class: 'note' }, '부품을 옮겨도 연결된 배선은 따라오지 않고, 영역(zone) 채움도 다시 계산되지 않습니다. 끊긴 곳은 흰 점선(미연결)으로 표시됩니다.'));
   } else if (it.k === 'symbol') {
     body.append(el('p', { class: 'note' }, '심볼을 옮겨도 배선은 따라오지 않습니다. 배선 끝점을 끌어 다시 맞춰 주세요.'));
   }
@@ -735,25 +1057,71 @@ function renderLayers() {
     body.append(el('button', { class: 'layer' + (l.visible ? '' : ' off'), onclick() { l.visible = !l.visible; refreshUi(); } },
       el('i', { style: 'background:' + l.color }), l.name));
   }
-  body.append(el('button', { class: 'panel-btn' + (doc.showZoneFill ? ' on' : ''), style: 'margin-top:10px', onclick() { doc.showZoneFill = !doc.showZoneFill; refreshUi(); } },
-    doc.showZoneFill ? '영역 채움 표시 중' : '영역 채움 숨김'));
+  if (!doc.isFootprintFile) {
+    body.append(el('button', { class: 'panel-btn' + (doc.showZoneFill ? ' on' : ''), style: 'margin-top:10px', onclick() { doc.showZoneFill = !doc.showZoneFill; refreshUi(); } },
+      doc.showZoneFill ? '영역 채움 표시 중' : '영역 채움 숨김'));
+  }
+}
+
+function renderCheck() {
+  const body = $('checkBody');
+  const doc = state.doc;
+  body.textContent = '';
+  if (!doc || (!isBoard(doc) && !isSheet(doc))) return;
+  const board = isBoard(doc);
+  body.append(el('h2', null, board ? '설계 규칙 검사 (DRC)' : '연결 검사 (ERC)'));
+  if (board) {
+    const grid = el('div', { class: 'rules' });
+    for (const key of Object.keys(DEFAULT_RULES)) {
+      grid.append(fieldEl({ label: RULE_LABELS[key] + ' (mm)', type: 'number', value: rules[key], plain: true,
+        set(v) {
+          if (!(v >= 0)) return;
+          rules[key] = v;
+          try { localStorage.setItem('kicad-pad-rules', JSON.stringify(rules)); } catch (e) { /* private mode */ }
+          runCheck();
+          refreshUi();
+        } }));
+    }
+    body.append(grid);
+  }
+  const c = state.check;
+  if (!c || !checkFresh()) { body.append(el('p', { class: 'empty' }, '검사 중…')); return; }
+  const warns = c.violations.length - c.errors;
+  let cls = 'check-sum', text;
+  if (!c.violations.length) text = board ? '문제 없음 — 모든 연결이 이어져 있고 규칙을 지킵니다.' : '문제 없음 — 모든 핀과 배선이 연결되어 있습니다.';
+  else {
+    cls += c.errors ? ' bad' : ' warn';
+    text = `오류 ${c.errors}건 · 경고 ${warns}건` + (board ? ` · 미연결 ${c.unconnected}곳` : '') + (c.truncated ? ' (앞의 일부만 표시)' : '');
+  }
+  body.append(el('div', { class: cls }, text));
+  if (board && c.unfilledZones) {
+    body.append(el('p', { class: 'note' }, `채워지지 않은 영역(zone) ${c.unfilledZones}개는 연결로 계산하지 않았습니다. KiCad에서 B 키로 채운 뒤 저장하면 반영됩니다.`));
+  }
+  for (const v of c.violations) {
+    body.append(el('button', { class: 'viol' + (v.sev === 'warn' ? ' warn' : '') + (state.marker === v ? ' on' : ''), onclick() { gotoViolation(v); } }, el('i'), v.msg));
+  }
+  if (board) body.append(el('p', { class: 'empty', style: 'margin-top:12px' }, 'KiCad 프로젝트(.kicad_pro)의 규칙은 읽지 않으므로 위 기준값을 직접 맞춰 주세요. 구리 간격·단락·배선 폭·비아·외곽 간격·미연결을 확인하며, 영역 채움과 코트야드는 검사하지 않습니다.'));
 }
 
 function refreshUi() {
   const doc = state.doc;
+  renderTabs();
   if (doc) {
     const it = state.sel[0];
     $('undoBtn').disabled = !state.undo.length;
     $('redoBtn').disabled = !state.redo.length;
     $('rotateBtn').disabled = !(it && doc.canRotate(it));
-    $('deleteBtn').disabled = !(it && !it.fixed);
+    $('deleteBtn').disabled = !it || !!doc.isLibFile;
     const info = $('fileInfo');
     info.textContent = '';
-    info.append(el('b', null, state.fileName, state.dirty ? el('span', { class: 'dirty' }, ' ●') : null), doc.summary());
+    let badge = null;
+    if (checkFresh() && state.check.violations.length) badge = ' · 검사 ' + state.check.violations.length + '건';
+    info.append(el('b', null, state.fileName, state.dirty ? el('span', { class: 'dirty' }, ' ●') : null), doc.summary() + (badge || ''));
     document.title = (state.dirty ? '● ' : '') + state.fileName + ' – KiCad Pad Editor';
   }
   renderProps();
   renderLayers();
+  renderCheck();
   requestDraw();
 }
 
@@ -794,11 +1162,11 @@ function ask(label, value) {
     $('restoreBtn').textContent = '이어서 편집: ' + d.name + (d.dirty ? ' (저장 안 된 변경 있음)' : '');
   }
   if ('launchQueue' in window) {
-    window.launchQueue.setConsumer(async (p) => { if (p.files && p.files[0]) openFile(await p.files[0].getFile(), p.files[0]); });
+    window.launchQueue.setConsumer(async (p) => { for (const h of p.files || []) await openFile(await h.getFile(), h); });
   }
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
   // test hook
-  window.__kicadPad = { state, view, loadText, currentText, toWorld };
+  window.__kicadPad = { state, view, tabs, loadText, currentText, toWorld, runCheck, get v3() { return v3; } };
 })();
