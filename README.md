@@ -10,4 +10,7 @@ Static HTML study pages for an introductory aerospace engineering course.
 - `static_margin_cg_np_interactive.html`
 - `aero_ch3_4_viz.html`
 
+- `circuit-visualizer/`
+- `kicad-editor/` — KiCad schematic / PCB viewer and editor for iPad and iPhone (see `kicad-editor/README.md`)
+
 Use `index.html` as the GitHub Pages entry point.

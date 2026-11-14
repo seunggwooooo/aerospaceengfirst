@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>KiCad Pad Editor</title>
+  <meta name="description" content="iPad·iPhone 브라우저에서 KiCad 회로도와 PCB 파일을 열고 편집합니다.">
+  <meta name="theme-color" content="#1c2330">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="KiCad Pad">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icons/icon-180.png">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="bar" id="bar">
+    <div class="group">
+      <button data-act="open" title="파일 열기 (Ctrl+O)">열기</button>
+      <button data-act="save" class="needs-doc primary" title="저장 (Ctrl+S)">저장</button>
+      <button data-act="share" class="needs-doc" id="shareBtn" hidden title="공유 시트로 내보내기">공유</button>
+    </div>
+    <div class="group needs-doc">
+      <button data-act="undo" id="undoBtn" title="실행 취소 (Ctrl+Z)">↶</button>
+      <button data-act="redo" id="redoBtn" title="다시 실행 (Ctrl+Shift+Z)">↷</button>
+    </div>
+    <div class="group needs-doc tools" id="tools">
+      <button data-tool="select" class="on" title="선택·이동 (Esc)">선택</button>
+      <button data-tool="wire" class="sch-only" title="배선 그리기: 끌어서 긋기 (W)">배선</button>
+      <button data-tool="label" class="sch-only" title="라벨 추가 (L)">라벨</button>
+      <button data-tool="junction" class="sch-only" title="접점 추가 (J)">접점</button>
+      <button data-tool="nc" class="sch-only" title="미연결 표시 추가 (Q)">NC</button>
+      <button data-tool="text" class="sch-only" title="텍스트 추가 (T)">글자</button>
+    </div>
+    <div class="group needs-doc">
+      <button data-act="rotate" id="rotateBtn" title="90° 회전 (R)">회전</button>
+      <button data-act="delete" id="deleteBtn" class="danger" title="삭제 (Delete)">삭제</button>
+    </div>
+    <div class="group needs-doc">
+      <button data-act="fit" title="화면에 맞춤 (F)">맞춤</button>
+      <label class="grid-label" title="이동 격자">격자
+        <select id="gridSel"></select>
+      </label>
+      <select id="symSel" hidden title="라이브러리 심볼 선택"></select>
+      <button data-act="panel" id="panelBtn" title="속성·레이어 패널">패널</button>
+    </div>
+    <div class="file" id="fileInfo"></div>
+  </header>
+
+  <main id="main">
+    <div class="stage" id="stage">
+      <canvas id="cv"></canvas>
+      <div class="welcome" id="welcome">
+        <div class="card">
+          <h1>KiCad Pad Editor</h1>
+          <p class="lead">iPad·iPhone에서 KiCad 파일을 열어 보고, 고치고, 다시 저장합니다.</p>
+          <div class="actions">
+            <button class="big primary" data-act="open">KiCad 파일 열기</button>
+            <button class="big" data-sample="led_indicator.kicad_sch">예제 회로도</button>
+            <button class="big" data-sample="led_indicator.kicad_pcb">예제 PCB</button>
+          </div>
+          <div class="restore" id="restore" hidden>
+            <button class="big" data-act="restore" id="restoreBtn"></button>
+          </div>
+          <ul class="notes">
+            <li><b>지원 파일</b> <code>.kicad_sch</code> <code>.kicad_pcb</code> 편집 · <code>.kicad_mod</code> <code>.kicad_sym</code> 보기 (KiCad 6 이상)</li>
+            <li><b>조작</b> 한 손가락 끌기 = 화면 이동 · 두 손가락 = 확대/축소 · 탭 = 선택 · 선택한 것을 끌기 = 이동</li>
+            <li><b>저장</b> 파일은 서버로 보내지 않고 이 기기 안에서만 처리합니다. 수정한 부분만 바꿔 써서 원본 형식을 그대로 유지합니다.</li>
+            <li><b>홈 화면에 추가</b> Safari 공유 버튼 → “홈 화면에 추가”를 하면 앱처럼 전체 화면으로 열리고 오프라인에서도 동작합니다.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="hint" id="hint" hidden></div>
+      <div class="status" id="status"></div>
+    </div>
+    <aside class="panel" id="panel" hidden>
+      <div class="tabs">
+        <button data-tab="props" class="on">속성</button>
+        <button data-tab="layers" id="layersTab">레이어</button>
+        <button data-act="panel" class="close" title="닫기">×</button>
+      </div>
+      <div class="tab-body" id="propsBody"></div>
+      <div class="tab-body" id="layersBody" hidden></div>
+    </aside>
+  </main>
+
+  <dialog id="ask">
+    <form method="dialog">
+      <label id="askLabel" for="askInput"></label>
+      <input id="askInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="dlg-actions">
+        <button value="cancel" type="submit">취소</button>
+        <button value="ok" type="submit" class="primary">확인</button>
+      </div>
+    </form>
+  </dialog>
+
+  <input type="file" id="fileInput" hidden>
+  <div class="toast" id="toast" hidden></div>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
