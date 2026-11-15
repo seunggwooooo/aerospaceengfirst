@@ -104,6 +104,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 body:not(.has-doc) .needs-doc { display: none; }
 body:not(.is-sch) .sch-only { display: none; }
 body:not(.is-pcb) .pcb-only { display: none; }
+body:not(.is-pcb):not(.is-sch) .place-only { display: none; }
 body:not(.is-fp) .fp-only { display: none; }
 body:not(.is-pcb):not(.is-fp) .layer-ctl { display: none; }
 body:not(.is-pcb):not(.is-sch) .check-only { display: none; }
@@ -421,6 +422,12 @@ table.pins td:first-child { font-weight: 600; white-space: nowrap; }
 .part em { grid-column: 2; font-style: normal; font-size: 12px; color: #6b7587; }
 .tabs { overflow-x: auto; scrollbar-width: none; }
 .tabs button { flex: none; padding: 0 11px; }
+
+.pick-list { max-height: min(52vh, 460px); margin-top: 10px; overflow-y: auto; border: 1px solid var(--panel-line); border-radius: 6px; background: #fff; -webkit-overflow-scrolling: touch; }
+.pick-group { position: sticky; top: 0; padding: 5px 8px; background: #f0f3f7; color: #5a6475; font-size: 12px; font-weight: 600; }
+.pick-list .part { grid-template-columns: 130px 1fr; min-height: 40px; align-items: center; }
+.pick-list .empty { padding: 12px; margin: 0; }
+.pick-note { margin: 10px 0 0; color: #5a6475; font-size: 12.5px; line-height: 1.5; }
 
 /* ---------- dialog / toast ---------- */
 
