@@ -285,3 +285,16 @@ export function uuid() {
     return (c === 'x' ? r : (r & 3) | 8).toString(16);
   });
 }
+
+// Give every (uuid ...) / (tstamp ...) inside `node` a fresh id (used when copying items).
+export function reId(node) {
+  if (!node || node.t !== 'l') return;
+  if ((node.h === 'uuid' || node.h === 'tstamp') && node.items[1] && node.items[1].t === 'a') {
+    const id = uuid();
+    setRaw(node, 1, node.items[1].q ? '"' + id + '"' : id);
+    return;
+  }
+  for (const c of node.items) reId(c);
+}
+
+export function clone(node) { return parse(serialize(node)); }

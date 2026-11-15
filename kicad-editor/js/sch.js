@@ -1,5 +1,5 @@
 // .kicad_sch / .kicad_sym document: extraction, rendering, hit-testing, edits.
-import { parse, child, children, str, num, hasAtom, isHidden, ptsOf, setNum, setStr, setRaw, remove, insert, quote, uuid, fmt } from './sexpr.js';
+import { parse, child, children, str, num, hasAtom, isHidden, ptsOf, setNum, setStr, setRaw, remove, insert, quote, uuid, fmt, reId, clone } from './sexpr.js';
 import { partKind, pinType, refCompare } from './parts.js';
 import { DEG, arcFrom3, bezierPts, primDist, primBounds, emptyBounds, drawPrims, measure } from './draw.js';
 
@@ -156,6 +156,7 @@ export class SchDoc {
     this.libs = new Map();
     const u = child(root, 'uuid');
     this.quoteUuid = u && u.items[1] ? u.items[1].q : true;
+    this.version = num(child(root, 'version'), 1, 20230121);
 
     const libRoot = this.isLibFile ? root : child(root, 'lib_symbols');
     this.libNodes = new Map();
@@ -542,11 +543,48 @@ export class SchDoc {
   }
 
   moveBy(item, dx, dy) {
-    this.shift(item.n, dx, dy);
-    this.refresh(item);
+    this.followPins(item, () => {
+      this.shift(item.n, dx, dy);
+      this.refresh(item);
+    });
+  }
+
+  // Wire ends sitting on a symbol's pins stay on those pins when it moves or turns.
+  followPins(item, fn) {
+    if (item.k !== 'symbol' || this.followWires === false || !item.pins.length) { fn(); return; }
+    const att = [];
+    for (const w of this.items) {
+      if (w.k === 'label' || w.k === 'nc') {   // a label or no-connect sitting on a pin belongs to that pin
+        const idx = item.pins.findIndex((p) => Math.abs(p.x - w.x) < 0.005 && Math.abs(p.y - w.y) < 0.005);
+        if (idx >= 0) att.push({ w, e: -1, idx });
+        continue;
+      }
+      if ((w.k !== 'wire' && w.k !== 'bus') || w.pts.length !== 4) continue;
+      for (let e = 0; e < 2; e++) {
+        const x = w.pts[2 * e], y = w.pts[2 * e + 1];
+        const idx = item.pins.findIndex((p) => Math.abs(p.x - x) < 0.005 && Math.abs(p.y - y) < 0.005);
+        if (idx >= 0) att.push({ w, e, idx });
+      }
+    }
+    fn();
+    const touched = new Set();
+    for (const a of att) {
+      const p = item.pins[a.idx];
+      const xy = a.e < 0 ? child(a.w.n, 'at') : children(child(a.w.n, 'pts'), 'xy')[a.e];
+      if (!p || !xy) continue;
+      setNum(xy, 1, p.x, this.digits);
+      setNum(xy, 2, p.y, this.digits);
+      touched.add(a.w);
+    }
+    for (const w of touched) this.refresh(w);
   }
 
   rotate(item) {
+    if (item.k === 'symbol') { this.followPins(item, () => this.rotateNode(item)); return; }
+    this.rotateNode(item);
+  }
+
+  rotateNode(item) {
     const n = item.n;
     const at = child(n, 'at');
     if (item.k === 'symbol') {
@@ -599,7 +637,7 @@ export class SchDoc {
   // ---------- adding ----------
 
   add(text) {
-    const node = parse(text);
+    const node = typeof text === 'string' ? parse(text) : text;
     insert(this.root, node, ['sheet_instances', 'symbol_instances', 'embedded_fonts']);
     const it = this.build(node);
     if (it) this.items.push(it);
@@ -730,9 +768,135 @@ export class SchDoc {
     return pos;
   }
 
+  // ---------- new parts ----------
+
+  nextRef(prefix) {
+    let n = 1;
+    for (const it of this.items) {
+      if (it.k !== 'symbol' || !it.ref || !it.ref.startsWith(prefix)) continue;
+      const tail = it.ref.slice(prefix.length);
+      const v = parseInt(tail, 10);
+      if (/^\d+$/.test(tail) && v >= n) n = v + 1;
+    }
+    return prefix === '#PWR' ? prefix + String(n).padStart(2, '0') : prefix + n;
+  }
+
+  // (path ...) under which this sheet's symbols are annotated, and the project name.
+  instanceContext() {
+    for (const it of this.items) {
+      if (it.k !== 'symbol') continue;
+      const inst = child(it.n, 'instances');
+      const proj = inst && child(inst, 'project');
+      const path = proj && child(proj, 'path');
+      if (path) return { project: str(proj, 1) || '', path: str(path, 1) || '/' };
+    }
+    const u = child(this.root, 'uuid');
+    return { project: this.projectName || '', path: '/' + (u ? str(u, 1) : '') };
+  }
+
+  // v6 files keep annotation in a root (symbol_instances ...) table instead.
+  addLegacyInstance(symUuid, ref, value, footprint, likeUuid) {
+    const table = child(this.root, 'symbol_instances');
+    if (!table) return;
+    let prefix = '/';
+    if (likeUuid) for (const p of children(table, 'path')) { const s = str(p, 1) || ''; if (s.endsWith('/' + likeUuid)) prefix = s.slice(0, s.length - likeUuid.length); }
+    insert(table, parse(`(path ${quote(prefix + symUuid)} (reference ${quote(ref)}) (unit 1) (value ${quote(value)}) (footprint ${quote(footprint)}))`));
+  }
+
+  setSymbolRef(node, ref) {
+    for (const p of children(node, 'property')) if (str(p, 1) === 'Reference') setStr(p, 2, ref);
+    const inst = child(node, 'instances');
+    if (inst) for (const proj of children(inst, 'project')) for (const path of children(proj, 'path')) { const r = child(path, 'reference'); if (r) setStr(r, 1, ref); }
+  }
+
+  cloneSymbol(item, dx, dy) {
+    const copy = clone(item.n);
+    const oldId = str(child(item.n, 'uuid'));
+    reId(copy);
+    this.shift(copy, dx, dy);
+    const power = (item.ref || '')[0] === '#';
+    const prefix = power ? item.ref.replace(/\d+$/, '') : (item.ref || 'U').replace(/[\d?]+$/, '') || 'U';
+    const ref = this.nextRef(prefix);
+    this.setSymbolRef(copy, ref);
+    const it = this.add(copy);
+    this.addLegacyInstance(str(child(copy, 'uuid')), ref, item.value || '', '', oldId);
+    return it;
+  }
+
+  // Symbols that can be placed straight from this schematic's own library section.
+  ownSymbols() {
+    const out = [];
+    for (const [name, node] of this.libNodes) if (!child(node, 'extends')) out.push({ name, node });
+    return out;
+  }
+
+  // Place a symbol; `node` is its library definition (from this file or a .kicad_sym), `full` its "Lib:Name" id.
+  placeSymbol(node, full, x, y) {
+    if (!this.libNodes.has(full)) {
+      let libs = child(this.root, 'lib_symbols');
+      if (!libs) libs = insert(this.root, parse('(lib_symbols)'), ['junction', 'no_connect', 'wire', 'bus', 'text', 'label', 'global_label', 'symbol', 'sheet', 'sheet_instances']);
+      const copy = clone(node);
+      setStr(copy, 1, full);
+      insert(libs, copy);
+      this.libNodes.set(full, copy);
+      this.libs.delete(full);
+    }
+    const def = this.libNodes.get(full);
+    const lib = this.lib(full);
+    const power = !!child(def, 'power');
+    const hide = this.hideYes === undefined ? (this.hideYes = /\(hide yes\)/.test(this.root.src)) : this.hideYes;
+    const id = () => this.uid();
+    const symId = uuid();
+    let refPrefix = 'U', value = full.split(':').pop();
+    const props = [];
+    for (const p of children(def, 'property')) {
+      const key = str(p, 1) || '';
+      if (key.startsWith('ki_')) continue;
+      let val = str(p, 2) || '';
+      if (key === 'Reference') { refPrefix = val || 'U'; continue; }
+      if (key === 'Value') value = val || value;
+      props.push({ key, val, p });
+    }
+    const ref = this.nextRef(power ? '#PWR' : refPrefix.replace(/[\d?]+$/, '') || 'U');
+    const refDef = children(def, 'property').find((p) => str(p, 1) === 'Reference');
+    const propText = (key, val, p, forceHide) => {
+      const at = p && child(p, 'at');
+      const px = x + (at ? num(at, 1) : 0), py = y - (at ? num(at, 2) : 0);
+      const size = p && child(child(child(p, 'effects'), 'font'), 'size');
+      const sz = size ? `${this.f(num(size, 1, 1.27))} ${this.f(num(size, 2, 1.27))}` : '1.27 1.27';
+      const hidden = forceHide || (p && isHidden(p));
+      const fx = `(effects (font (size ${sz}))${hidden ? (hide ? ' (hide yes)' : ' hide') : ''})`;
+      return `(property ${quote(key)} ${quote(val)} (at ${this.f(px)} ${this.f(py)} ${at ? this.f(num(at, 3)) : 0}) ${fx})`;
+    };
+    let text = `(symbol (lib_id ${quote(full)}) (at ${this.f(x)} ${this.f(y)} 0) (unit 1) (in_bom yes) (on_board yes)${this.version >= 20230121 ? ' (dnp no)' : ''} (uuid ${this.quoteUuid ? '"' + symId + '"' : symId})`;
+    text += ' ' + propText('Reference', ref, refDef, power);
+    for (const pr of props) text += ' ' + propText(pr.key, pr.val, pr.p, false);
+    const seen = new Set();
+    if (lib) for (const u of lib.units) {
+      if (u.unit > 1) continue;
+      for (const c of u.nodes) {
+        if (c.h !== 'pin') continue;
+        const numb = str(child(c, 'number')) || '';
+        if (seen.has(numb)) continue;
+        seen.add(numb);
+        text += ` (pin ${quote(numb)} (uuid ${id()}))`;
+      }
+    }
+    if (this.version >= 20230121) {
+      const ctx = this.instanceContext();
+      text += ` (instances (project ${quote(ctx.project)} (path ${quote(ctx.path)} (reference ${quote(ref)}) (unit 1))))`;
+    }
+    text += ')';
+    const it = this.add(text);
+    if (this.version < 20230121) this.addLegacyInstance(symId, ref, value, '', null);
+    return it;
+  }
+
   parts() {
     return this.items.filter((it) => it.k === 'symbol' && it.ref && it.ref[0] !== '#')
-      .map((it) => ({ item: it, ref: it.ref + (it.unit > 1 ? ' (유닛 ' + it.unit + ')' : ''), value: it.value, kind: partKind(it.ref, it.libId + ' ' + it.value) }))
+      .map((it) => ({ item: it, ref: it.ref + (it.unit > 1 ? ' (유닛 ' + it.unit + ')' : ''), value: it.value,
+        footprint: (children(it.n, 'property').find((p) => str(p, 1) === 'Footprint') ? str(children(it.n, 'property').find((p) => str(p, 1) === 'Footprint'), 2) : '') || '',
+        kind: partKind(it.ref, it.libId + ' ' + it.value) }))
       .sort((a, b) => refCompare(a.ref, b.ref));
   }
 

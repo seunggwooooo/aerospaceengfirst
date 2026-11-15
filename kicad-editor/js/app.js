@@ -23,6 +23,7 @@ const state = {
   check: null,        // last DRC / ERC result
   marker: null,       // violation being looked at
   tool: 'select',
+  pending: null,      // part chosen in the picker, waiting to be placed
   preview: null,      // polyline being drawn
 };
 const TAB_KEYS = ['doc', 'fileName', 'handle', 'sel', 'undo', 'redo', 'dirty', 'padInfo', 'check', 'marker'];
@@ -31,7 +32,10 @@ let cur = -1;
 const view = { k: 4, tx: 0, ty: 0, dpr: 1, w: 0, h: 0 };
 
 let rules = { ...DEFAULT_RULES };
+let project = null;   // values read from a .kicad_pro: { name, width, viaSize, viaDrill }
 try { Object.assign(rules, JSON.parse(localStorage.getItem('kicad-pad-rules') || '{}')); } catch (e) { /* defaults */ }
+try { project = JSON.parse(localStorage.getItem('kicad-pad-project') || 'null'); } catch (e) { /* none */ }
+const store = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private mode */ } };
 
 const isBoard = (doc) => doc && doc.kind === 'pcb' && !doc.isFootprintFile;
 const isFp = (doc) => doc && doc.kind === 'pcb' && doc.isFootprintFile;
@@ -51,7 +55,12 @@ export function makeDoc(text) {
 function initDoc(doc) {
   if (doc.kind !== 'pcb') return;
   if (doc.isFootprintFile) doc.route = { layer: doc.layerNames.includes('F.SilkS') ? 'F.SilkS' : doc.layerNames[0] };
-  else { const d = doc.defaults(); doc.route = { layer: doc.copper[0] || 'F.Cu', width: d.width, viaSize: d.viaSize, viaDrill: d.viaDrill }; }
+  else {
+    const d = doc.defaults();
+    doc.route = { layer: doc.copper[0] || 'F.Cu', width: d.width, viaSize: d.viaSize, viaDrill: d.viaDrill };
+    const hasTracks = doc.items.some((it) => it.k === 'seg');
+    if (project && !hasTracks) Object.assign(doc.route, { width: project.width || d.width, viaSize: project.viaSize || d.viaSize, viaDrill: project.viaDrill || d.viaDrill });
+  }
 }
 
 function stash() {
@@ -137,7 +146,82 @@ function closeTab(i) {
 
 async function openFile(file, handle) {
   const text = await file.text();
+  if (/\.kicad_pro$/i.test(file.name) || text.trimStart()[0] === '{') { loadProject(text, file.name); return; }
   if (loadText(text, file.name, handle)) saveDraft();
+}
+
+// A KiCad project file carries the design rules; take the ones this app checks.
+function loadProject(text, name) {
+  let j;
+  try { j = JSON.parse(text); } catch (e) { toast('프로젝트 파일(.kicad_pro)을 읽을 수 없습니다', true); return; }
+  const r = (j.board && j.board.design_settings && j.board.design_settings.rules) || {};
+  const classes = (j.net_settings && j.net_settings.classes) || [];
+  const cls = classes.find((c) => c.name === 'Default') || classes[0] || {};
+  const pos = (v) => (typeof v === 'number' && v > 0 ? v : null);
+  const next = {
+    clearance: Math.max(pos(r.min_clearance) || 0, pos(cls.clearance) || 0) || null,
+    trackWidth: pos(r.min_track_width),
+    viaSize: pos(r.min_via_diameter),
+    viaDrill: pos(r.min_through_hole_diameter),
+    annular: pos(r.min_via_annular_width),
+    edge: typeof r.min_copper_edge_clearance === 'number' && r.min_copper_edge_clearance >= 0 ? r.min_copper_edge_clearance : null,
+  };
+  const got = Object.entries(next).filter(([, v]) => v !== null);
+  if (!got.length && !pos(cls.track_width)) { toast('이 프로젝트 파일에는 읽을 수 있는 설계 규칙이 없습니다', true); return; }
+  for (const [k, v] of got) rules[k] = v;
+  project = { name, width: pos(cls.track_width), viaSize: pos(cls.via_diameter), viaDrill: pos(cls.via_drill), netClasses: classes.length };
+  store('kicad-pad-rules', rules);
+  store('kicad-pad-project', project);
+  stash();
+  for (const t of tabs) {
+    if (!isBoard(t.doc)) continue;
+    if (project.width) t.doc.route.width = project.width;
+    if (project.viaSize) t.doc.route.viaSize = project.viaSize;
+    if (project.viaDrill) t.doc.route.viaDrill = project.viaDrill;
+    t.check = null;
+  }
+  if (state.doc) {
+    state.check = null;
+    if (isBoard(state.doc)) $('widthInp').value = state.doc.route.width;
+    runCheck();
+    if (isBoard(state.doc)) showPanel('check');
+    refreshUi();
+  }
+  toast(`규칙을 불러왔습니다 (${name}): 간격 ${rules.clearance} · 배선 폭 ${rules.trackWidth} · 비아 ${rules.viaSize}/${rules.viaDrill} mm`);
+}
+
+function downloadText(name, text) {
+  const url = URL.createObjectURL(new Blob(['\ufeff' + text], { type: 'text/csv' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  toast('내려받았습니다: ' + name);
+}
+
+const csv = (rows) => rows.map((r) => r.map((c) => { const v = String(c ?? ''); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(',')).join('\r\n') + '\r\n';
+
+function exportBom() {
+  const groups = new Map();
+  for (const p of state.doc.parts()) {
+    const ref = p.ref.replace(/ \(유닛 \d+\)$/, '');
+    const key = p.value + '\u0000' + p.footprint;
+    let g = groups.get(key);
+    if (!g) groups.set(key, (g = { refs: new Set(), value: p.value, footprint: p.footprint, kind: p.kind }));
+    g.refs.add(ref);
+  }
+  const rows = [['Reference', 'Qty', 'Value', 'Footprint', 'Type']];
+  for (const g of groups.values()) rows.push([[...g.refs].join(', '), g.refs.size, g.value, g.footprint, g.kind]);
+  downloadText(state.fileName.replace(/\.[^.]+$/, '') + '-bom.csv', csv(rows));
+}
+
+function exportPositions() {
+  const rows = [['Ref', 'Val', 'Package', 'PosX', 'PosY', 'Rot', 'Side']];
+  for (const p of state.doc.parts()) rows.push([p.ref, p.value, p.footprint.split(':').pop(), p.x.toFixed(4), p.y.toFixed(4), p.ang.toFixed(1), p.side]);
+  downloadText(state.fileName.replace(/\.[^.]+$/, '') + '-pos.csv', csv(rows));
 }
 
 async function openSample(name) {
@@ -682,6 +766,19 @@ async function tap(sx, sy, g) {
     refreshUi();
     return;
   }
+  if (tool === 'place-part') {
+    const c = state.pending;
+    if (!c) { setTool('select'); return; }
+    checkpoint();
+    let it = null;
+    try { it = isSheet(doc) ? doc.placeSymbol(c.node, c.full, gx, gy) : doc.placeFootprint(c.node, c.nick, gx, gy); }
+    catch (e) { toast('부품을 놓지 못했습니다: ' + (e.message || e), true); }
+    state.sel = it ? [it] : [];
+    setTool('select', true);
+    changed();
+    if (it) toast(`${it.ref} 추가` + (isBoard(doc) ? ' — 패드를 탭해 네트를 지정하세요' : ''));
+    return;
+  }
   if (tool === 'junction') { checkpoint(); doc.addJunction(gx, gy); changed(); return; }
   if (tool === 'nc') { checkpoint(); doc.addNoConnect(gx, gy); changed(); return; }
   if (tool === 'pad') { checkpoint(); const it = doc.addPad(gx, gy); state.sel = it ? [it] : []; setTool('select', true); changed(); return; }
@@ -735,11 +832,75 @@ const HINTS = {
   fpline: '끌어서 선을 긋습니다 — 레이어는 위에서 고릅니다',
 };
 
+// ----- part picker -----
+
+const BASIC_LIB = { GND: 'power', '+5V': 'power', '+3V3': 'power', VCC: 'power', Conn_01x02: 'Connector_Generic', Conn_01x03: 'Connector_Generic',
+  Conn_01x04: 'Connector_Generic', SW_Push: 'Switch' };
+let basicSyms = null, basicFp = null;
+const stem = (name) => name.replace(/\.[^.]+$/, '');
+
+async function partChoices() {
+  const doc = state.doc;
+  const out = [];
+  if (isSheet(doc)) {
+    if (!basicSyms) {
+      try { basicSyms = [...new SchDoc(parse(await (await fetch('./samples/basic.kicad_sym')).text())).libNodes]; } catch (e) { basicSyms = []; }
+    }
+    for (const [name, node] of basicSyms) out.push({ group: '기본 부품', label: name, sub: (BASIC_LIB[name] || 'Device') + ':' + name, node, full: (BASIC_LIB[name] || 'Device') + ':' + name });
+    for (const o of doc.ownSymbols()) out.push({ group: '이 회로도에 쓰인 부품', label: o.name.split(':').pop(), sub: o.name, node: o.node, full: o.name });
+    tabs.forEach((t) => {
+      if (!t.doc.isLibFile) return;
+      for (const [name, node] of t.doc.libNodes) {
+        if (t.doc.libNodes.get(name) && !/\(extends /.test(node.src.slice(node.s, node.s + 200))) out.push({ group: '라이브러리 ' + t.fileName, label: name, sub: stem(t.fileName) + ':' + name, node, full: stem(t.fileName) + ':' + name });
+      }
+    });
+  } else if (isBoard(doc)) {
+    if (!basicFp) {
+      try { basicFp = parse(await (await fetch('./samples/R_0805_demo.kicad_mod')).text()); } catch (e) { basicFp = null; }
+    }
+    tabs.forEach((t) => { if (isFp(t.doc)) out.push({ group: '열려 있는 풋프린트 파일', label: t.doc.fpName, sub: t.fileName, node: t.doc.root, nick: null }); });
+    if (basicFp) out.push({ group: '예제', label: 'R_0805_demo', sub: '0805 저항 풋프린트', node: basicFp, nick: null });
+  }
+  return out;
+}
+
+async function openPicker() {
+  const choices = await partChoices();
+  const dlg = $('picker');
+  const list = $('pickList');
+  const input = $('pickInput');
+  const board = isBoard(state.doc);
+  $('pickNote').textContent = board
+    ? '풋프린트 파일(.kicad_mod)을 “열기”로 탭에 열어 두면 이 목록에 나옵니다. 보드에 있는 부품은 선택 후 “복제”로 늘릴 수 있습니다. 놓은 뒤 패드를 탭해 네트를 지정하세요.'
+    : '심볼 라이브러리(.kicad_sym)를 “열기”로 탭에 열어 두면 이 목록에 나옵니다.';
+  const render = () => {
+    const q = input.value.trim().toLowerCase();
+    list.textContent = '';
+    let group = null, n = 0;
+    for (const c of choices) {
+      if (q && !(c.label + ' ' + c.sub).toLowerCase().includes(q)) continue;
+      if (++n > 300) break;
+      if (c.group !== group) { group = c.group; list.append(el('div', { class: 'pick-group' }, group)); }
+      list.append(el('button', { type: 'button', class: 'part', onclick() {
+        dlg.close();
+        state.pending = c;
+        setTool('place-part');
+      } }, el('b', null, c.label), el('span', null, c.sub)));
+    }
+    if (!n) list.append(el('p', { class: 'empty' }, '맞는 부품이 없습니다.'));
+  };
+  input.value = '';
+  input.oninput = render;
+  render();
+  dlg.showModal();
+}
+
 function setTool(t, keepSel) {
   state.tool = t;
   state.preview = null;
-  for (const b of document.querySelectorAll('[data-tool]')) b.classList.toggle('on', b.dataset.tool === t);
+  for (const b of document.querySelectorAll('[data-tool]')) b.classList.toggle('on', b.dataset.tool === t || (t === 'place-part' && b.dataset.tool === 'part'));
   const h = $('hint');
+  if (t === 'place-part' && state.pending) HINTS['place-part'] = state.pending.label + ' — 놓을 곳을 탭하세요';
   h.hidden = !HINTS[t];
   h.textContent = HINTS[t] || '';
   cv.style.cursor = t === 'select' ? 'default' : 'crosshair';
@@ -823,6 +984,7 @@ const actions = {
 
 function fire(t) {
   if (t.dataset.act) actions[t.dataset.act]();
+  else if (t.dataset.tool === 'part') openPicker();
   else if (t.dataset.tool) setTool(t.dataset.tool);
   else if (t.dataset.tab) showPanel(t.dataset.tab);
   else if (t.dataset.sample) openSample(t.dataset.sample);
@@ -1023,6 +1185,18 @@ function renderProps() {
       i++;
     } else body.append(fieldEl(a));
   }
+  if ((it.k === 'symbol' && isSheet(doc)) || (it.k === 'fp' && isBoard(doc))) {
+    body.append(el('button', { class: 'panel-btn', onclick() {
+      checkpoint();
+      let copy;
+      if (it.k === 'symbol') copy = doc.cloneSymbol(it, 0, snap(it.bb[3] - it.bb[1] + 5.08, 2.54));
+      else copy = doc.cloneFootprint(it, snap(it.bb[2] - it.bb[0] + 1, doc.grid), 0);
+      state.sel = copy ? [copy] : [];
+      state.padInfo = null;
+      changed();
+      if (copy) toast(`${copy.ref} 로 복제했습니다` + (it.k === 'fp' ? ' — 패드 네트는 비어 있습니다' : ''));
+    } }, '이 부품 복제'));
+  }
   const probe = crossProbe(it);
   if (probe) {
     body.append(el('button', { class: 'panel-btn', onclick() {
@@ -1036,6 +1210,18 @@ function renderProps() {
   if (doc.kind === 'pcb') {
     const pad = state.padInfo;
     if (pad) body.append(fieldEl({ label: '탭한 패드', type: 'info', value: pad.pad + (pad.net ? '  ·  네트 ' + pad.net : '  ·  연결 없음') }));
+    if (pad && it.k === 'fp' && isBoard(doc)) {
+      const NONE = '(연결 없음)', NEW = '+ 새 네트 만들기…';
+      body.append(fieldEl({ label: `패드 ${pad.pad} 의 네트 지정`, type: 'select', options: [NONE, ...doc.netList(), NEW], value: pad.net || NONE, plain: true,
+        async set(v) {
+          let net = v === NONE ? null : v;
+          if (v === NEW) { net = (await ask('새 네트 이름', '') || '').trim(); if (!net) { refreshUi(); return; } }
+          checkpoint();
+          doc.setPadNet(it, pad.pad, net);
+          state.padInfo = { pad: pad.pad, net };
+          changed();
+        } }));
+    }
     const net = (pad && pad.net) || it.net;
     if (net) {
       const on = doc.hlNet === net;
@@ -1059,9 +1245,9 @@ function renderProps() {
     } else body.append(el('div', { class: 'drc-ok' }, '연결 검사 통과'));
   }
   if (isBoard(doc) && (it.k === 'fp' || it.k === 'seg' || it.k === 'via')) {
-    body.append(el('p', { class: 'note' }, '부품을 옮겨도 연결된 배선은 따라오지 않고, 영역(zone) 채움도 다시 계산되지 않습니다. 끊긴 곳은 흰 점선(미연결)으로 표시됩니다.'));
+    body.append(el('p', { class: 'note' }, '부품을 옮기거나 돌리면 패드에 붙은 배선 끝이 따라옵니다(배선이 비스듬해질 수 있으니 DRC를 확인하세요). 영역(zone) 채움은 다시 계산되지 않습니다.'));
   } else if (it.k === 'symbol') {
-    body.append(el('p', { class: 'note' }, '심볼을 옮겨도 배선은 따라오지 않습니다. 배선 끝점을 끌어 다시 맞춰 주세요.'));
+    body.append(el('p', { class: 'note' }, '심볼을 옮기거나 돌리면 핀에 붙은 배선 끝이 따라옵니다. 배선이 비스듬해지면 끝점을 끌어 정리하세요.'));
   }
 }
 
@@ -1110,6 +1296,9 @@ function renderParts() {
   if (!doc || !doc.parts || (!isBoard(doc) && !isSheet(doc))) return;
   const parts = doc.parts();
   body.append(el('h2', null, '부품 목록 (' + parts.length + ')'));
+  const tools = el('div', { class: 'layer-tools', style: 'grid-template-columns:1fr 1fr' }, el('button', { class: 'panel-btn', onclick: exportBom }, 'BOM 내보내기 (CSV)'));
+  if (isBoard(doc)) tools.append(el('button', { class: 'panel-btn', onclick: exportPositions }, '부품 위치 (CSV)'));
+  body.append(tools);
   body.append(el('p', { class: 'empty' }, '탭하면 그 부품으로 이동합니다. 종류는 참조 번호(R, C, U…)로 추정한 것입니다.'));
   for (const p of parts) {
     body.append(el('button', { class: 'part' + (state.sel[0] === p.item ? ' on' : ''), onclick() { selectAndShow(p.item); } },
@@ -1131,13 +1320,16 @@ function renderCheck() {
         set(v) {
           if (!(v >= 0)) return;
           rules[key] = v;
-          try { localStorage.setItem('kicad-pad-rules', JSON.stringify(rules)); } catch (e) { /* private mode */ }
+          store('kicad-pad-rules', rules);
           runCheck();
           refreshUi();
         } }));
     }
     body.append(grid);
   }
+  if (board) body.append(el('p', { class: 'empty' }, project
+    ? `규칙 출처: ${project.name}` + (project.netClasses > 1 ? ' (Default 넷클래스 기준 — 넷클래스별 규칙은 적용하지 않습니다)' : '')
+    : '프로젝트 파일(.kicad_pro)을 “열기”로 열면 그 프로젝트의 규칙을 불러옵니다.'));
   const c = state.check;
   if (!c || !checkFresh()) { body.append(el('p', { class: 'empty' }, '검사 중…')); return; }
   const warns = c.violations.length - c.errors;
@@ -1154,7 +1346,7 @@ function renderCheck() {
   for (const v of c.violations) {
     body.append(el('button', { class: 'viol' + (v.sev === 'warn' ? ' warn' : '') + (state.marker === v ? ' on' : ''), onclick() { gotoViolation(v); } }, el('i'), v.msg));
   }
-  if (board) body.append(el('p', { class: 'empty', style: 'margin-top:12px' }, 'KiCad 프로젝트(.kicad_pro)의 규칙은 읽지 않으므로 위 기준값을 직접 맞춰 주세요. 구리 간격·단락·배선 폭·비아·외곽 간격·미연결을 확인하며, 영역 채움과 코트야드는 검사하지 않습니다.'));
+  if (board) body.append(el('p', { class: 'empty', style: 'margin-top:12px' }, '구리 간격·단락·배선 폭·비아·외곽 간격·미연결을 확인하며, 영역 채움과 코트야드는 검사하지 않습니다.'));
 }
 
 function refreshUi() {

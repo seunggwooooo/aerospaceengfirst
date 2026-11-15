@@ -1,5 +1,5 @@
 // .kicad_pcb / .kicad_mod document: extraction, rendering, hit-testing, edits.
-import { parse, serialize, child, children, str, num, hasAtom, isHidden, ptsOf, setNum, setStr, setRaw, remove, insert, quote, uuid, fmt } from './sexpr.js';
+import { parse, serialize, child, children, str, num, hasAtom, isHidden, ptsOf, setNum, setStr, setRaw, remove, insert, quote, uuid, fmt, reId, clone } from './sexpr.js';
 import { DEG, arcFrom3, bezierPts, primDist, primBounds, emptyBounds, drawPrims, drawText, shapePointDist, shapeCenter } from './draw.js';
 import { partKind, pinType, refCompare } from './parts.js';
 
@@ -636,11 +636,65 @@ export class PcbDoc {
 
   moveBy(item, dx, dy) {
     if (item.k === 'fp') {
-      const at = child(item.n, 'at');
-      setNum(at, 1, num(at, 1) + dx, this.digits);
-      setNum(at, 2, num(at, 2) + dy, this.digits);
-    } else this.shiftNode(item.n, dx, dy);
+      this.follow(item, () => {
+        const at = child(item.n, 'at');
+        setNum(at, 1, num(at, 1) + dx, this.digits);
+        setNum(at, 2, num(at, 2) + dy, this.digits);
+        this.refresh(item);
+      });
+      return;
+    }
+    this.shiftNode(item.n, dx, dy);
     this.refresh(item);
+  }
+
+  // Track ends that sit on this footprint's pads (same net), so they can follow it.
+  attach(item) {
+    if (item._att && item._attRev === this.rev) return item._att;
+    const att = [];
+    const bb = item.bb;
+    for (const seg of this.items) {
+      if (seg.k !== 'seg') continue;
+      for (let e = 0; e < 2; e++) {
+        const x = e ? seg.x2 : seg.x1, y = e ? seg.y2 : seg.y1;
+        if (x < bb[0] - 0.01 || x > bb[2] + 0.01 || y < bb[1] - 0.01 || y > bb[3] + 0.01) continue;
+        for (let pi = 0; pi < item.cu.length; pi++) {
+          const s = item.cu[pi];
+          if (s.layers !== '*' && !s.layers.has(seg.layer)) continue;
+          if (seg.net && s.net && seg.net !== s.net) continue;
+          if (shapePointDist(s, x, y) > 0) continue;
+          const c = shapeCenter(s);
+          att.push({ seg, end: e, pad: pi, ox: x - c[0], oy: y - c[1] });
+          break;
+        }
+      }
+    }
+    return att;
+  }
+
+  // Run an edit that moves / turns a footprint and drag the attached track ends along.
+  follow(item, fn) {
+    if (this.followTracks === false) { fn(); return; }
+    const att = this.attach(item);
+    const a0 = item.ang;
+    fn();
+    const d = (item.ang - a0) * DEG, cs = Math.cos(d), sn = Math.sin(d);
+    const touched = new Set();
+    for (const a of att) {
+      const s = item.cu[a.pad];
+      if (!s) continue;
+      const c = shapeCenter(s);
+      const ox = a.ox * cs + a.oy * sn, oy = -a.ox * sn + a.oy * cs;
+      a.ox = ox; a.oy = oy;
+      const node = child(a.seg.n, a.end ? 'end' : 'start');
+      setNum(node, 1, c[0] + ox, this.digits);
+      setNum(node, 2, c[1] + oy, this.digits);
+      touched.add(a.seg);
+    }
+    for (const seg of touched) this.refresh(seg);
+    item._att = att;
+    item._attRev = this.rev;
+    return touched.size;
   }
 
   rotate(item) {
@@ -660,14 +714,16 @@ export class PcbDoc {
     const old = num(at, 3);
     const d = ang - old;
     if (!d) return;
-    setNum(at, 3, normAng(ang), 4);
-    for (const c of item.n.items) {
-      if (c.h === 'pad' || c.h === 'fp_text' || c.h === 'property') {
-        const a = child(c, 'at');
-        if (a) setNum(a, 3, normAng(num(a, 3) + d), 4);
+    this.follow(item, () => {
+      setNum(at, 3, normAng(ang), 4);
+      for (const c of item.n.items) {
+        if (c.h === 'pad' || c.h === 'fp_text' || c.h === 'property') {
+          const a = child(c, 'at');
+          if (a) setNum(a, 3, normAng(num(a, 3) + d), 4);
+        }
       }
-    }
-    this.refresh(item);
+      this.refresh(item);
+    });
   }
 
   remove(item) {
@@ -680,8 +736,8 @@ export class PcbDoc {
 
   // ---------- adding (routing, vias, footprint parts) ----------
 
-  add(text, vars) {
-    const node = parse(text);
+  add(text) {
+    const node = typeof text === 'string' ? parse(text) : text;
     insert(this.root, node, this.isFootprintFile ? ['model', 'embedded_fonts'] : ['zone', 'group', 'embedded_fonts', 'embedded_files']);
     const it = this.isFootprintFile ? this.buildFpChild(node, this.fpVars()) : this.build(node);
     if (it) this.items.push(it);
@@ -825,7 +881,8 @@ export class PcbDoc {
       };
       fields.push({ label: '참조 (Reference)', type: 'text', value: item.ref, set: (v) => setField('Reference', v) });
       fields.push({ label: '값 (Value)', type: 'text', value: item.value, set: (v) => setField('Value', v) });
-      fields.push(...xy(child(n, 'at'), '위치'));
+      fields.push({ label: '위치 X', type: 'number', value: item.x, set(v) { self.moveBy(item, v - item.x, 0); } });
+      fields.push({ label: '위치 Y', type: 'number', value: item.y, set(v) { self.moveBy(item, 0, v - item.y); } });
       fields.push({ label: '각도 (°)', type: 'number', value: item.ang, set(v) { self.setFpAngle(item, v); } });
       const kind = partKind(item.ref, item.name + ' ' + item.value);
       if (kind) fields.splice(0, 0, { label: '부품 종류', type: 'info', value: kind });
@@ -913,10 +970,97 @@ export class PcbDoc {
     return [];
   }
 
+  // ---------- new parts ----------
+
+  nextRef(prefix) {
+    let n = 1;
+    for (const it of this.items) {
+      if (it.k !== 'fp' || !it.ref || !it.ref.startsWith(prefix)) continue;
+      const v = parseInt(it.ref.slice(prefix.length), 10);
+      if (String(v) === it.ref.slice(prefix.length) && v >= n) n = v + 1;
+    }
+    return prefix + n;
+  }
+
+  setFpRef(node, ref) {
+    for (const c of node.items) {
+      if ((c.h === 'property' && str(c, 1) === 'Reference') || (c.h === 'fp_text' && str(c, 1) === 'reference')) setStr(c, 2, ref);
+    }
+  }
+
+  // Copy of a footprint already on the board. Pads start without nets.
+  cloneFootprint(item, dx, dy) {
+    const copy = clone(item.n);
+    reId(copy);
+    const at = child(copy, 'at');
+    setNum(at, 1, num(at, 1) + dx, this.digits);
+    setNum(at, 2, num(at, 2) + dy, this.digits);
+    for (const key of ['path', 'sheetname', 'sheetfile']) { const c = child(copy, key); if (c) remove(c); }
+    for (const pad of children(copy, 'pad')) { const net = child(pad, 'net'); if (net) remove(net); }
+    this.setFpRef(copy, this.nextRef((item.ref || 'U').replace(/[\d?*]+$/, '') || 'U'));
+    return this.addFootprintNode(copy);
+  }
+
+  // Place a footprint from a .kicad_mod file.
+  placeFootprint(src, nick, x, y) {
+    const copy = clone(src);
+    for (const key of ['version', 'generator', 'generator_version', 'tedit']) { const c = child(copy, key); if (c) remove(c); }
+    const name = str(copy, 1) || 'footprint';
+    if (name.indexOf(':') < 0 && nick) setStr(copy, 1, nick + ':' + name);
+    const layer = child(copy, 'layer');
+    const after = layer ? copy.items[copy.items.indexOf(layer) + 1] : copy.items[2];
+    const before = after && after.h ? [after.h] : null;
+    if (!child(copy, 'uuid') && !child(copy, 'tstamp')) insert(copy, parse(this.idNode()), before);
+    const old = child(copy, 'at');
+    if (old) remove(old);
+    insert(copy, parse(`(at ${this.f(x)} ${this.f(y)})`), before);
+    reId(copy);
+    const n = name.split(':').pop();
+    const prefix = /^R_|^R\d/.test(n) ? 'R' : /^CP?_|^C\d/.test(n) ? 'C' : /^L_/.test(n) ? 'L' : /^LED|^D_|^D\d/.test(n) ? 'D'
+      : /^SOT|^TO-/.test(n) ? 'Q' : /PinHeader|PinSocket|Conn|USB|Jack|Terminal/i.test(n) ? 'J' : /^SW|Button/i.test(n) ? 'SW' : /Crystal|Oscillator/i.test(n) ? 'Y' : 'U';
+    this.setFpRef(copy, this.nextRef(prefix));
+    return this.addFootprintNode(copy);
+  }
+
+  addFootprintNode(node) {
+    insert(this.root, node, ['gr_line', 'gr_rect', 'gr_circle', 'gr_arc', 'gr_poly', 'gr_curve', 'gr_text', 'dimension', 'segment', 'arc', 'via', 'zone', 'group', 'embedded_fonts', 'embedded_files']);
+    const it = this.build(node);
+    if (it) this.items.push(it);
+    this._buckets = null;
+    this.rev = (this.rev || 0) + 1;
+    return it;
+  }
+
+  netList() {
+    const set = new Set(this.netNames.values());
+    for (const it of this.items) if (it.cu) for (const s of it.cu) if (s.net) set.add(s.net);
+    set.delete('');
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }
+
+  // Assign (or clear) the net of one pad of a footprint on the board.
+  setPadNet(item, number, net) {
+    if (net && !this.netsByName && !this.netCodes.has(net)) {
+      let code = 1;
+      for (const c of this.netNames.keys()) if (+c >= code) code = +c + 1;
+      insert(this.root, parse(`(net ${code} ${quote(net)})`), ['footprint', 'module', 'gr_line', 'gr_rect', 'gr_circle', 'gr_arc', 'gr_poly', 'gr_text', 'segment', 'arc', 'via', 'zone', 'group']);
+      this.netNames.set(String(code), net);
+      this.netCodes.set(net, String(code));
+    }
+    for (const pad of children(item.n, 'pad')) {
+      if (str(pad, 1) !== number) continue;
+      const old = child(pad, 'net');
+      if (old) remove(old);
+      if (net) insert(pad, parse(this.netsByName ? `(net ${quote(net)})` : `(net ${this.netCodes.get(net)} ${quote(net)})`), ['pinfunction', 'pintype', 'uuid', 'tstamp', 'zone_connect', 'thermal_bridge_angle']);
+    }
+    this.refresh(item);
+  }
+
   // Parts list for the panel.
   parts() {
     return this.items.filter((it) => it.k === 'fp' && it.ref)
-      .map((it) => ({ item: it, ref: it.ref, value: it.value, kind: partKind(it.ref, it.name + ' ' + it.value) }))
+      .map((it) => ({ item: it, ref: it.ref, value: it.value, footprint: it.name, x: it.x, y: it.y, ang: it.ang, side: it.layer === 'B.Cu' ? 'bottom' : 'top',
+        kind: partKind(it.ref, it.name + ' ' + it.value) }))
       .sort((a, b) => refCompare(a.ref, b.ref));
   }
 
