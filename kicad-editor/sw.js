@@ -1,5 +1,5 @@
 // Offline support: network first, falling back to the last cached copy.
-const CACHE = 'kicad-pad-v4';
+const CACHE = 'kicad-pad-v5';
 const SHELL = ['./', './index.html', './style.css', './manifest.webmanifest', './icons/icon.svg', './icons/icon-180.png',
   './js/app.js', './js/sexpr.js', './js/draw.js', './js/pcb.js', './js/sch.js', './js/conn.js', './js/erc.js', './js/parts.js', './js/view3d.js',
   './vendor/three.module.min.js', './vendor/OrbitControls.js', './samples/R_0805_demo.kicad_mod', './samples/basic.kicad_sym',
