@@ -37,19 +37,57 @@ function label(s) {
   return '배선';
 }
 
+// Edges of a filled polygon bucketed into horizontal strips, so a shape only
+// looks at the few edges near it (fills can have many thousands of points).
+const STRIP = 1.0;
+function fillIndex(f) {
+  if (f._idx) return f._idx;
+  const pts = f.pts;
+  const strips = new Map();
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0, j = pts.length - 2; i < pts.length; j = i, i += 2) {
+    const ax = pts[j], ay = pts[j + 1], bx = pts[i], by = pts[i + 1];
+    if (ax < x0) x0 = ax; if (ax > x1) x1 = ax;
+    if (ay < y0) y0 = ay; if (ay > y1) y1 = ay;
+    const s0 = Math.floor(Math.min(ay, by) / STRIP), s1 = Math.floor(Math.max(ay, by) / STRIP);
+    for (let st = s0; st <= s1; st++) {
+      let row = strips.get(st);
+      if (!row) strips.set(st, (row = []));
+      row.push(ax, ay, bx, by);
+    }
+  }
+  return (f._idx = { strips, bb: [x0, y0, x1, y1] });
+}
+
 // True when copper shape `s` overlaps the filled polygon (inside it, or reached by
 // its outline — thermal-relief spokes end inside the pad).
-function touchesFill(s, sb, poly) {
-  if (pointInPoly(s.pts[0], s.pts[1], poly)) return true;
+function touchesFill(s, sb, f) {
+  const idx = fillIndex(f);
+  const b = idx.bb;
+  if (sb[0] > b[2] || b[0] > sb[2] || sb[1] > b[3] || b[1] > sb[3]) return false;
+  const px = s.pts[0], py = s.pts[1];
+  let row = idx.strips.get(Math.floor(py / STRIP));
+  if (row) {
+    let inside = false;
+    for (let k = 0; k < row.length; k += 4) {
+      const ay = row[k + 1], by = row[k + 3];
+      if ((ay > py) !== (by > py) && px < ((row[k + 2] - row[k]) * (py - ay)) / (by - ay) + row[k]) inside = !inside;
+    }
+    if (inside) return true;
+  }
   const np = s.pts.length >> 1;
   const edges = np >= 3 ? np : Math.max(1, np - 1);
   const lim = s.r + 0.005;
-  for (let i = 0, j = poly.length - 2; i < poly.length; j = i, i += 2) {
-    const ax = poly[j], ay = poly[j + 1], bx = poly[i], by = poly[i + 1];
-    if ((ax < sb[0] && bx < sb[0]) || (ax > sb[2] && bx > sb[2]) || (ay < sb[1] && by < sb[1]) || (ay > sb[3] && by > sb[3])) continue;
-    for (let e = 0; e < edges; e++) {
-      const e2 = (e + 1) % np;
-      if (segSegDist(ax, ay, bx, by, s.pts[2 * e], s.pts[2 * e + 1], s.pts[2 * e2], s.pts[2 * e2 + 1]) <= lim) return true;
+  for (let st = Math.floor(sb[1] / STRIP); st <= Math.floor(sb[3] / STRIP); st++) {
+    row = idx.strips.get(st);
+    if (!row) continue;
+    for (let k = 0; k < row.length; k += 4) {
+      const ax = row[k], ay = row[k + 1], bx = row[k + 2], by = row[k + 3];
+      if ((ax < sb[0] && bx < sb[0]) || (ax > sb[2] && bx > sb[2]) || (ay < sb[1] && by < sb[1]) || (ay > sb[3] && by > sb[3])) continue;
+      for (let e = 0; e < edges; e++) {
+        const e2 = (e + 1) % np;
+        if (segSegDist(ax, ay, bx, by, s.pts[2 * e], s.pts[2 * e + 1], s.pts[2 * e2], s.pts[2 * e2 + 1]) <= lim) return true;
+      }
     }
   }
   return false;
@@ -177,25 +215,42 @@ export function analyze(doc, rules) {
     }
   }
 
+  const tight = new Array(nCopper);
   // zone fills connect same-net copper lying inside them
   let unfilled = 0;
   zones.forEach((z, zi) => {
     const fills = z.prims.filter((p) => p.zf);
     if (!fills.length) { unfilled++; return; }
     const node = nCopper + zi;
-    const boxes = fills.map((f) => bbOf({ pts: f.pts, r: 0 }, 0));
     for (let i = 0; i < nCopper; i++) {
       const s = shapes[i];
       if (s.net !== z.net) continue;
       for (let k = 0; k < fills.length; k++) {
-        const f = fills[k], b = boxes[k];
+        const f = fills[k];
         if (s.layers !== '*' && !s.layers.has(f.layer)) continue;
-        const sb = bbOf(s, 0.01);
-        if (sb[0] > b[2] || b[0] > sb[2] || sb[1] > b[3] || b[1] > sb[3]) continue;
-        if (touchesFill(s, sb, f.pts)) { union(i, node); break; }
+        if (touchesFill(s, tight[i] || (tight[i] = bbOf(s, 0.01)), f)) { union(i, node); break; }
       }
     }
   });
+
+  // copper of another net lying on a (stale) zone fill: the pour was computed before this copper was there
+  const seenZone = new Set();
+  for (const z of zones) {
+    for (const f of z.prims) {
+      if (!f.zf) continue;
+      for (let i = 0; i < nCopper; i++) {
+        const s = shapes[i];
+        if (s.net === z.net) continue;
+        if (s.layers !== '*' && !s.layers.has(f.layer)) continue;
+        if (seenZone.has(s.it) && s.it.k !== 'fp') continue;
+        if (!touchesFill(s, tight[i] || (tight[i] = bbOf(s, 0.01)), f)) continue;
+        seenZone.add(s.it);
+        const c = shapeCenter(s);
+        push({ type: 'zone', sev: 'warn', x: c[0], y: c[1], items: [s.it],
+          msg: `구리 채움(${z.net})과 겹침: ${label(s)} (${s.net || '네트 없음'}) — KiCad에서 영역을 다시 채우면(B) 피해서 깔립니다` });
+      }
+    }
+  }
 
   // widths, vias
   for (const it of doc.items) {
@@ -256,7 +311,7 @@ export function analyze(doc, rules) {
     const g = gap.get(s.it);
     if (g === undefined || s.minGap < g) gap.set(s.it, s.minGap);
   }
-  const order = { short: 0, clearance: 1, edge: 2, width: 3, via: 4, unconnected: 5 };
+  const order = { short: 0, clearance: 1, edge: 2, width: 3, via: 4, zone: 5, unconnected: 6 };
   violations.sort((a, b) => order[a.type] - order[b.type]);
   return { kind: 'drc', rules: R, violations, ratsnest, unconnected, gap, unfilledZones: unfilled, truncated: violations.length >= MAX_VIOLATIONS,
     errors: violations.filter((v) => v.sev === 'error').length, shapes: nCopper, ms: Date.now() - t0, rev: doc.rev || 0 };

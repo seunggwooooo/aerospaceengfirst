@@ -35,6 +35,8 @@ let rules = { ...DEFAULT_RULES };
 let project = null;   // values read from a .kicad_pro: { name, width, viaSize, viaDrill }
 try { Object.assign(rules, JSON.parse(localStorage.getItem('kicad-pad-rules') || '{}')); } catch (e) { /* defaults */ }
 try { project = JSON.parse(localStorage.getItem('kicad-pad-project') || 'null'); } catch (e) { /* none */ }
+let blockOn = true;   // refuse edits that create a short or a clearance violation
+try { blockOn = localStorage.getItem('kicad-pad-block') !== '0'; } catch (e) { /* default */ }
 const store = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private mode */ } };
 
 const isBoard = (doc) => doc && doc.kind === 'pcb' && !doc.isFootprintFile;
@@ -319,6 +321,7 @@ function saveDraft() {
 // ---------- undo ----------
 
 function checkpoint() {
+  dirtyBefore = state.dirty;
   state.undo.push(currentText());
   let total = 0;
   for (const s of state.undo) total += s.length;
@@ -339,6 +342,35 @@ function restoreText(text) {
   state.padInfo = null;
   state.check = null;
   state.marker = null;
+}
+
+// ----- conflict guard (PCB): an edit must not add shorts or clearance violations -----
+
+let dirtyBefore = false;
+const BLOCKING = new Set(['short', 'clearance']);
+const conflictsOf = (res) => (res ? res.violations.filter((v) => BLOCKING.has(v.type)).length : 0);
+const conflictsNow = () => conflictsOf(checkFresh() ? state.check : runCheck());
+const guardOn = () => blockOn && isBoard(state.doc);
+
+// Undo the edit just made (its checkpoint is on top of the undo stack) and say why.
+function refuse(v) {
+  restoreText(state.undo.pop());
+  state.dirty = dirtyBefore;
+  changed();
+  runCheck();
+  state.marker = { x: v.x, y: v.y, sev: v.sev, type: v.type, items: [], msg: v.msg };
+  toast('막았습니다 — ' + v.msg, true);
+  refreshUi();
+}
+
+// After an edit: if it added a conflict, take it back. Returns true when the edit stands.
+function settle(before, items) {
+  if (!guardOn()) return true;
+  const res = runCheck();
+  if (conflictsOf(res) <= before) return true;
+  const bad = res.violations.find((v) => BLOCKING.has(v.type) && items && v.items.some((it) => items.includes(it))) || res.violations.find((v) => BLOCKING.has(v.type));
+  refuse(bad);
+  return false;
 }
 
 function undo() {
@@ -572,6 +604,7 @@ function drawEnd(g) {
   if (!p) return;
   const pts = p.pts;
   if (Math.hypot(pts[pts.length - 2] - pts[0], pts[pts.length - 1] - pts[1]) < 1e-6) { requestDraw(); return; }
+  const before = guardOn() && state.tool === 'route' ? conflictsNow() : 0;
   checkpoint();
   const made = [];
   if (state.tool === 'route') {
@@ -582,6 +615,7 @@ function drawEnd(g) {
       if (it) made.push(it);
     }
     changed();
+    if (!settle(before, made)) return;
     const res = runCheck();
     const bad = res.violations.find((v) => v.type !== 'unconnected' && v.items.some((it) => made.includes(it)));
     if (bad) { state.marker = bad; toast('DRC: ' + bad.msg, true); }
@@ -677,13 +711,13 @@ cv.addEventListener('pointermove', (e) => {
     const dx = snap(wx - g.wx, doc.grid), dy = snap(wy - g.wy, doc.grid);
     const ddx = dx - g.applied[0], ddy = dy - g.applied[1];
     if (ddx || ddy) {
-      if (!g.started) { checkpoint(); g.started = true; }
+      if (!g.started) { g.before = guardOn() ? conflictsNow() : 0; checkpoint(); g.started = true; }
       for (const it of state.sel) doc.moveBy(it, ddx, ddy);
       g.applied = [dx, dy];
       requestDraw();
     }
   } else if (g.mode === 'handle') {
-    if (!g.started) { checkpoint(); g.started = true; }
+    if (!g.started) { g.before = guardOn() ? conflictsNow() : 0; checkpoint(); g.started = true; }
     let x = snap(wx, doc.grid), y = snap(wy, doc.grid);
     const it = state.sel[0];
     if (it.k === 'seg') {   // track ends snap onto pads, vias and other track ends
@@ -706,7 +740,7 @@ function endGesture(cancel) {
   if (!g) return;
   if (g.mode === 'draw') {
     if (cancel) { routeDone(g); state.preview = null; requestDraw(); } else drawEnd(g);
-  } else if ((g.mode === 'move' || g.mode === 'handle') && g.started) changed();
+  } else if ((g.mode === 'move' || g.mode === 'handle') && g.started) { changed(); settle(g.before, state.sel); }
 }
 
 function pointerUp(e) {
@@ -787,8 +821,11 @@ async function tap(sx, sy, g) {
     const a = doc.anchorAt(wx, wy, tolFor(g.touch), r.layer);
     const x = a ? a.x : gx, y = a ? a.y : gy;
     const net = (a && a.net) || doc.netAt(x, y, r.layer);
+    const before = guardOn() ? conflictsNow() : 0;
     checkpoint();
     const it = doc.addVia(x, y, r.viaSize, r.viaDrill, net);
+    changed();
+    if (!settle(before, [it])) return;
     const first = doc.copper[0], last = doc.copper[doc.copper.length - 1];
     r.layer = r.layer === first ? last : first;
     $('layerSel').value = r.layer;
@@ -911,9 +948,11 @@ function rotateSel() {
   const doc = state.doc;
   const items = state.sel.filter((it) => doc.canRotate(it));
   if (!items.length) return;
+  const before = guardOn() ? conflictsNow() : 0;
   checkpoint();
   for (const it of items) doc.rotate(it);
   changed();
+  settle(before, items);
 }
 
 function deleteSel() {
@@ -1121,9 +1160,12 @@ function fieldEl(f) {
       v = parseFloat(v.replace(',', '.'));
       if (!Number.isFinite(v)) { refreshUi(); return; }
     }
-    if (!f.plain) checkpoint();
+    if (f.plain) { f.set(v); return; }
+    const before = guardOn() ? conflictsNow() : 0;
+    checkpoint();
     f.set(v);
-    if (!f.plain) changed();
+    changed();
+    settle(before, state.sel);
   });
   if (f.type !== 'textarea') input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); });
   wrap.append(input);
@@ -1327,6 +1369,16 @@ function renderCheck() {
     }
     body.append(grid);
   }
+  if (board) {
+    body.append(el('button', { class: 'panel-btn' + (blockOn ? ' on' : ''), style: 'margin-bottom:10px', onclick() {
+      blockOn = !blockOn;
+      try { localStorage.setItem('kicad-pad-block', blockOn ? '1' : '0'); } catch (e) { /* private mode */ }
+      refreshUi();
+    } }, blockOn ? '충돌 시 막기: 켜짐' : '충돌 시 막기: 꺼짐 (경고만)'));
+    body.append(el('p', { class: 'empty' }, blockOn
+      ? '배선·비아 추가나 이동·회전·값 수정으로 단락이나 간격 위반이 새로 생기면 그 편집을 되돌립니다.'
+      : '단락이나 간격 위반이 생겨도 편집은 그대로 두고 경고만 표시합니다.'));
+  }
   if (board) body.append(el('p', { class: 'empty' }, project
     ? `규칙 출처: ${project.name}` + (project.netClasses > 1 ? ' (Default 넷클래스 기준 — 넷클래스별 규칙은 적용하지 않습니다)' : '')
     : '프로젝트 파일(.kicad_pro)을 “열기”로 열면 그 프로젝트의 규칙을 불러옵니다.'));
@@ -1415,5 +1467,5 @@ function ask(label, value) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
   // test hook
-  window.__kicadPad = { state, view, tabs, loadText, currentText, toWorld, runCheck, get v3() { return v3; } };
+  window.__kicadPad = { state, view, tabs, loadText, currentText, toWorld, runCheck, setBlock(v) { blockOn = v; }, get v3() { return v3; } };
 })();

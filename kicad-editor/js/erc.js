@@ -88,7 +88,56 @@ export function analyzeSch(doc) {
     violations.push({ type: 'label', sev: 'warn', x: it.x, y: it.y, items: [it], msg: `라벨이 배선이나 핀에 붙어 있지 않음: ${it.prims[it.prims.length - 1].text}` });
   }
 
-  const order = { duplicate: 0, pin: 1, dangling: 2, label: 3, nc: 4, annotation: 5 };
+  // ---- nets: wires that touch form one net; two different names on it is a conflict ----
+  if (wires.length <= 4000) {
+    const par = wires.map((_, i) => i);
+    const find = (i) => { while (par[i] !== i) { par[i] = par[par[i]]; i = par[i]; } return i; };
+    const on = (x, y, w) => distToSeg(x, y, w[0], w[1], w[2], w[3]) < 0.005;
+    for (let i = 0; i < wires.length; i++) {
+      const a = wires[i];
+      for (let j = i + 1; j < wires.length; j++) {
+        const b = wires[j];
+        if ((a[4].k === 'bus') !== (b[4].k === 'bus')) continue;
+        if (on(a[0], a[1], b) || on(a[2], a[3], b) || on(b[0], b[1], a) || on(b[2], b[3], a)) par[find(i)] = find(j);
+      }
+    }
+    for (const [k, m] of marks) {
+      if (!m.has('junction')) continue;
+      const [jx, jy] = k.split(',').map((v) => v / 100);
+      let first = -1;
+      wires.forEach((w, i) => { if (w[4].k === 'wire' && on(jx, jy, w)) { if (first < 0) first = i; else par[find(i)] = find(first); } });
+    }
+    const names = new Map();
+    const name = (x, y, text, power, item) => {
+      const i = wires.findIndex((w) => w[4].k === 'wire' && on(x, y, w));
+      if (i < 0 || !text) return;
+      const r = find(i);
+      let m = names.get(r);
+      if (!m) names.set(r, (m = new Map()));
+      if (!m.has(text)) m.set(text, { x, y, power, item });
+    };
+    for (const it of labels) if (it.kind === 'label' || it.kind === 'global_label') name(it.x, it.y, it.prims[it.prims.length - 1].text, false, it);
+    for (const it of doc.items) if (it.k === 'symbol' && it.ref && it.ref[0] === '#' && it.value && !/PWR_FLAG/i.test(it.value + it.libId)) for (const p of it.pins) name(p.x, p.y, it.value, true, it);
+    for (const m of names.values()) {
+      if (m.size < 2) continue;
+      const list = [...m.entries()];
+      const powers = list.filter(([, v]) => v.power).length;
+      const at = list[1][1];
+      violations.push({ type: 'netname', sev: powers >= 2 ? 'error' : 'warn', x: at.x, y: at.y, items: list.map(([, v]) => v.item),
+        msg: (powers >= 2 ? '서로 다른 전원이 한 배선으로 이어짐: ' : '한 배선에 이름이 여러 개: ') + list.map(([n]) => n).join(', ') });
+    }
+    // a wire running across a pin connects to it even though it does not end there
+    for (const [k, arr] of pins) {
+      if (ends.has(k)) continue;
+      for (const { sym, pin } of arr) {
+        if (pin.hidden || (sym.ref || '')[0] === '#') continue;
+        const w = wires.find((q) => q[4].k === 'wire' && on(pin.x, pin.y, q));
+        if (w) violations.push({ type: 'through', sev: 'warn', x: pin.x, y: pin.y, items: [sym, w[4]], msg: `배선이 핀 위를 지나가며 연결됨: ${sym.ref || '?'} 핀 ${pin.number} — 의도한 연결인지 확인하세요` });
+      }
+    }
+  }
+
+  const order = { duplicate: 0, netname: 1, pin: 2, through: 3, dangling: 4, label: 5, nc: 6, annotation: 7 };
   violations.sort((a, b) => order[a.type] - order[b.type]);
   return { kind: 'erc', violations, ratsnest: [], errors: violations.filter((v) => v.sev === 'error').length, ms: Date.now() - t0, rev: doc.rev || 0 };
 }
